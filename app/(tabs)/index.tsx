@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import * as Notifications from "expo-notifications";
 import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
@@ -10,6 +11,7 @@ const colors = { ink: "#102532", muted: "#5E707A", paper: "#F3F6F5", card: "#FFF
 const supported = { jeeny: "me.com.easytaxista", bolt: "ee.mtakso.driver" } as const;
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [enabled, setEnabled] = useState(false);
@@ -122,7 +124,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={card}>
-          <View style={rowBetween}><Text style={heading}>Your rules</Text><Pressable onPress={() => Platform.OS === "web" ? window.alert("Use the app settings screen in the native Android app to edit rules.") : Alert.alert("Edit your rules", "Open the Rules tab to change fare limits, pickup time, region, app, and keyword lists.")}><Text style={{ color: "#087D70", fontWeight: "700" }}>Settings →</Text></Pressable></View>
+          <View style={rowBetween}><Text style={heading}>Your rules</Text><Pressable onPress={() => router.push("/rules")}><Text style={{ color: "#087D70", fontWeight: "700" }}>Settings →</Text></Pressable></View>
           <RuleLine title="Selected app" detail={`${settings.targetApp === "jeeny" ? "Jeeny Driver" : "Bolt Driver"} · ${settings.region === "SA" ? "Saudi Arabia" : "Jordan"}`} />
           <RuleLine title="Excluded destinations" detail={settings.excludedKeywords.join(" · ") || "None"} />
           <RuleLine title="Preferred destinations" detail={settings.preferredKeywords.join(" · ") || "None · preference never overrides safety rules"} />
