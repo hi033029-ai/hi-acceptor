@@ -1,1 +1,1 @@
-{"routes":[{"path":"/","title":"Home"},{"path":"/rules","title":"Rules"},{"path":"/privacy","title":"Privacy"}]}
+{"routes":[{"path":"/","title":"Home"},{"path":"/rules","title":"Rules"},{"path":"/privacy","title":"Privacy"},{"path":"/oauth/callback","title":"OAuth callback"},{"path":"/dev/theme-lab","title":"Theme lab"}]}
