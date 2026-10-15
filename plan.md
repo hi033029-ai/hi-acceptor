@@ -2,53 +2,36 @@
 
 ## Product scope
 
-Build a free Android ride-request auto-accept utility based on the user-linked video. The app is configured on-device and supports Jeeny and Bolt Driver. It evaluates a request only when the fare is within the driver's inclusive minimum/maximum, pickup time is no greater than the configured maximum, and no excluded destination keyword appears. Unknown or ambiguous fare/time data must fail closed and never trigger a tap. Preferred-location terms are a visible match annotation, not an override of the hard criteria. The example defaults mirror the video: SAR 12–80, pickup limit 5 minutes, exclusions `Airport` and `مطار`, and preferred term `hamara`.
+HI Acceptor is a free, account-free Android utility. The driver sets their own inclusive minimum and maximum fare plus a pickup-time limit; there is no seeded SAR 12–80 range. A valid fare range is required before operation can start.
 
-There is no payment, paid activation, account activation, Telegram/WhatsApp gate, subscription, or unlock mechanism. No account, backend, or network call is needed for product behavior; settings and local activity are stored on-device. A built-in web preview can exercise the rule simulator but cannot provide Android Accessibility behavior. Android system permission is explicit and user-controlled. Do not advise disabling Play Protect or other device security controls.
+Location circles are created and stored in HI Acceptor, independently from the selected driver app. The driver may configure up to five excluded circles and one optional preferred circle. Each circle contains a user-picked map center and an adjustable radius from 250 metres to 10 kilometres. Any unambiguously located request inside an excluded circle is declined only when an explicit decline control is identified. A preferred circle annotates a match without overriding fare, pickup, currency, or exclusion rules. Unknown location, ambiguous geocoding, missing controls, and unsupported content fail closed.
+
+## Privacy and provider scope
+
+There is no HI Acceptor account, payment/activation, messaging gate, or HI Acceptor backend data path. Rules and status stay on-device. When the map picker is opened, it loads online OpenStreetMap tiles with attribution; there is no offline tile downloading. When configured circles need matching, Android's system Geocoder may send a visible destination name to the device provider to resolve coordinates. Disclose this and do not call the public Nominatim API. See [`docs/location-data.md`](docs/location-data.md) for the reviewed provider constraints.
 
 ## Implementation approach
 
-- Keep rule parsing/evaluation in a pure TypeScript module for testability and a web simulator. Parse a fare only with a currency/price context and pickup ETA only with a pickup/time context; ambiguous or missing fields produce a no-accept outcome.
-- Add a local Expo module with a native Android `AccessibilityService` and a small bridge. Limit screen inspection to the selected official app package IDs (`me.com.easytaxista` for Jeeny Driver and `ee.mtakso.driver` for Bolt Driver). The service reads only accessibility text from those foreground apps, only while the user has enabled both the Android service and HI Acceptor's operation switch. It finds an explicit accept control, taps at most once per request, debounces repeated UI events, and stores a compact local status record. Do not transmit screen text.
-- Store rules locally, synchronize them to the native service, and show a clear permission/on/off state. Require explicit Android Accessibility permission. Missing permission, unsupported app, incomplete parse, ambiguous request, or missing accept button means no action.
-- Use local notifications for a successful auto-accept when the user grants notification permission. The web preview remains a simulator and labels itself as such.
-- Keep the scaffold's unused server/database adapters out of the product flow. Do not implement login, payment, activation, messaging, or remote telemetry.
+- Keep parsing and circle distance checks in a pure TypeScript module with deterministic tests and a simulator.
+- Implement Android Accessibility service support for the selected Jeeny Driver and Bolt Driver package IDs. The service reads only the selected foreground app, only with explicit Android Accessibility and the HI Acceptor Start switch both enabled.
+- For excluded zones, resolve the destination with Android's system Geocoder and compare it against saved circles. Decline only a uniquely resolved in-circle request and only via an explicit decline control. If location checks are not possible, do not accept or decline based on a guessed location.
+- Accept only a request that passes user-entered fare, currency, pickup, and exclusion rules and has a clearly identified accept control.
+- Store settings and status locally. The Preview is simulator-only; real behavior requires a native Android build and device verification. Do not advise disabling Play Protect or other Android security controls.
 
-## Project structure
+## Main project areas
 
-- `app/(tabs)/index.tsx`: operation dashboard, permission state, active control, local status, and simulator.
-- `app/(tabs)/rules.tsx`: fare bounds, pickup limit, currency/region, app selection, and keyword lists.
-- `app/(tabs)/privacy.tsx`: local-data explanation, Accessibility disclosure, and permission controls.
-- `lib/ride-rules.ts`: pure parsing, eligibility, and preferred-term annotation.
-- `lib/hi-acceptor-native.ts`: typed optional native bridge with a non-Android preview fallback.
-- `modules/hi-acceptor/`: Android Expo module, AccessibilityService, and local settings/status bridge.
-- `plugins/withHiAcceptorAccessibility.ts`: config plugin that registers the service and its XML configuration in Android builds.
-- `tests/ride-rules.test.ts`: rule parsing and decision tests.
-- `assets/images/`: launcher, splash, adaptive icon and monochrome assets.
-- `plan.md` and `TODO.md`: design/implementation decisions and outcome tracking.
+- `app/(tabs)/index.tsx`: operation dashboard, user-rule summary, and simulator.
+- `app/(tabs)/rules.tsx`: driver-chosen fare bounds, pickup limit, app selection, and independently selected map circles.
+- `components/AreaPicker.native.tsx`: Leaflet/OpenStreetMap tap-to-center circle picker with radius control.
+- `components/AreaPicker.web.tsx`: preview-only coordinate editor.
+- `app/(tabs)/privacy.tsx`: Accessibility, local storage, map, and geocoder disclosures.
+- `lib/ride-rules.ts`: request rules, Haversine distance, and circle matching.
+- `lib/hi-acceptor-store.ts`: local storage and the five-excluded/one-preferred caps.
+- `modules/hi-acceptor/`: Android Expo module and Accessibility service.
+- `plugins/withHiAcceptorAccessibility.ts`: Android service manifest configuration.
+- `tests/ride-rules.test.ts`: rule and circle tests.
+- `docs/location-data.md`: OSM/geocoder usage constraints and official references.
 
-## Interface design
+## Visual direction
 
-### Style options considered (sampled low-probability choices)
-- Quiet civic instrument — 0.06.
-- High-contrast night dispatch — 0.04.
-- Warm utility ledger — 0.02.
-
-### Selected: Quiet civic instrument
-
-- **Design movement:** calm public-service instrument panel, with the clarity of a transit operations console.
-- **Core principles:** explicit operational state; transparent reasons for each decision; local-first privacy; one-handed, forgiving controls.
-- **Color philosophy:** warm off-white and graphite for neutral surfaces, a distinctive clear teal for enabled/eligible states, and restrained amber for caution; red is reserved for blocked/unsafe states.
-- **Layout paradigm:** a vertical mobile flow with a distinctive status rail at the top, a single prominent operation control, then stacked rule/status cards rather than a dense dashboard grid.
-- **Signature elements:** a thin route-line motif, compact fare-range meter, and reason chips for accepted/skipped requests.
-- **Interaction philosophy:** automation is opt-in, visible, immediately stoppable, and never silently falls back to a different target app.
-- **Animation:** a soft, slow pulse only while active; short state transitions; no looping motion when inactive.
-- **Typography system:** platform system sans for excellent Android rendering; large numeric fare bounds; clear label/value contrast and readable Arabic text.
-- **Brand essence:** a transparent ride-filter assistant for drivers that accepts only the requests they configured; direct, careful, dependable.
-- **Brand voice:** concise, factual, and non-promotional. Examples: “Only requests inside your rules can be accepted.” “No request data leaves this phone.”
-- **Wordmark & logo:** compact route/check symbol built from two road strokes converging into a check; no tiny lettering.
-- **Signature brand color:** clear teal (`#20B7A5`).
-
-## Integration facts
-
-Official Google Play pages identify Jeeny Driver as package `me.com.easytaxista` and Bolt Driver as `ee.mtakso.driver`. Sources: [Jeeny Driver on Google Play](https://play.google.com/store/apps/details?id=me.com.easytaxista&hl=en_US) and [Bolt Driver on Google Play](https://play.google.com/store/apps/details?id=ee.mtakso.driver&hl=en_US). These package names are used solely to scope the Accessibility listener to the selected driver app.
+Use a clear, calm utility interface: large fare values, a visible operation state, one-handed cards, teal for enabled/matched states, amber for cautions, and red for blocked actions. Keep operation opt-in and immediately stoppable. Never silently switch to another target app.

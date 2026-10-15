@@ -1,36 +1,49 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { RideSettings } from "@/lib/ride-rules";
+import type { AreaCircle, RideSettings } from "@/lib/ride-rules";
 
 export type TargetApp = "jeeny" | "bolt";
 export type StoredSettings = RideSettings & { targetApp: TargetApp; region: "SA" | "JO" };
 export type ActivityItem = { id: string; at: string; accepted: boolean; reason: string; fare?: number; destination?: string };
 
+export const MAX_EXCLUDED_AREAS = 5;
 export const DEFAULT_SETTINGS: StoredSettings = {
-  minFare: 12,
-  maxFare: 80,
+  minFare: 0,
+  maxFare: 0,
   maxPickupMinutes: 5,
   currency: "SAR",
-  excludedKeywords: ["Airport", "مطار"],
-  preferredKeywords: ["hamara"],
+  excludedAreas: [],
+  preferredArea: null,
   targetApp: "jeeny",
   region: "SA",
 };
 
-const SETTINGS_KEY = "hiaccept.settings.v1";
+const SETTINGS_KEY = "hiaccept.settings.v2";
 const ACTIVITY_KEY = "hiaccept.activity.v1";
 const ENABLED_KEY = "hiaccept.enabled.v1";
+
+function normalizeAreas(settings: StoredSettings): StoredSettings {
+  return {
+    ...settings,
+    excludedAreas: Array.isArray(settings.excludedAreas) ? settings.excludedAreas.slice(0, MAX_EXCLUDED_AREAS) : [],
+    preferredArea: settings.preferredArea ?? null,
+  };
+}
 
 export async function loadSettings(): Promise<StoredSettings> {
   try {
     const stored = await AsyncStorage.getItem(SETTINGS_KEY);
-    return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
+    return stored ? normalizeAreas({ ...DEFAULT_SETTINGS, ...JSON.parse(stored) }) : DEFAULT_SETTINGS;
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
 export async function saveSettings(settings: StoredSettings) {
-  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizeAreas(settings)));
+}
+
+export function createArea(latitude: number, longitude: number, radiusMeters: number, label: string): AreaCircle {
+  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: label.trim() || "Area", latitude, longitude, radiusMeters };
 }
 
 export async function loadActivity(): Promise<ActivityItem[]> {

@@ -20,6 +20,8 @@ export default function HomeScreen() {
   const [fare, setFare] = useState("24");
   const [pickup, setPickup] = useState("4");
   const [destination, setDestination] = useState("City Center");
+  const [destinationLatitude, setDestinationLatitude] = useState("");
+  const [destinationLongitude, setDestinationLongitude] = useState("");
   const [decision, setDecision] = useState<Decision | null>(null);
 
   const refresh = useCallback(async () => {
@@ -34,11 +36,19 @@ export default function HomeScreen() {
     if (hasNativeAcceptor) await saveNativeSettings({ ...storedSettings, targetPackage: supported[storedSettings.targetApp] });
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const timer = setTimeout(() => { void refresh(); }, 0);
+    return () => clearTimeout(timer);
+  }, [refresh]);
 
-  const simulated = useMemo(() => evaluateRide({ fare: Number(fare), currency: settings.currency, pickupMinutes: Number(pickup), destination, text: "Preview" }, settings), [fare, pickup, destination, settings]);
+  const simulated = useMemo(() => evaluateRide({ fare: Number(fare), currency: settings.currency, pickupMinutes: Number(pickup), destination, text: "Preview", ...(destinationLatitude !== "" && destinationLongitude !== "" ? { destinationLatitude: Number(destinationLatitude), destinationLongitude: Number(destinationLongitude) } : {}) }, settings), [fare, pickup, destination, destinationLatitude, destinationLongitude, settings]);
 
   const toggleOperation = async () => {
+    if (!enabled && (!Number.isFinite(settings.minFare) || !Number.isFinite(settings.maxFare) || settings.maxFare <= settings.minFare)) {
+      Alert.alert("Set your fare range", "Enter your own minimum and maximum fares in Rules before starting automation.");
+      router.push("/rules");
+      return;
+    }
     if (!hasNativeAcceptor) {
       Alert.alert("Android build required", "The web preview is a simulator. Install a native Android build and enable HI Acceptor in Android Accessibility settings before starting auto-accept.");
       return;
@@ -102,7 +112,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={{ flexDirection: "row", gap: 10, marginBottom: 14 }}>
-          <Metric label="FARE RANGE" value={`${settings.currency} ${settings.minFare}–${settings.maxFare}`} />
+          <Metric label="FARE RANGE" value={settings.maxFare > settings.minFare ? `${settings.currency} ${settings.minFare}–${settings.maxFare}` : "Set your limits"} />
           <Metric label="PICKUP LIMIT" value={`${settings.maxPickupMinutes} min`} />
         </View>
 
@@ -114,6 +124,8 @@ export default function HomeScreen() {
           <TextInput value={pickup} onChangeText={setPickup} keyboardType="decimal-pad" style={input} accessibilityLabel="Simulator pickup time" />
           <Text style={label}>DESTINATION</Text>
           <TextInput value={destination} onChangeText={setDestination} style={input} accessibilityLabel="Simulator destination" />
+          <Text style={label}>DESTINATION LATITUDE / LONGITUDE (FOR CIRCLE TEST)</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}><TextInput value={destinationLatitude} onChangeText={setDestinationLatitude} placeholder="Latitude" keyboardType="decimal-pad" style={[input, { flex: 1 }]} /><TextInput value={destinationLongitude} onChangeText={setDestinationLongitude} placeholder="Longitude" keyboardType="decimal-pad" style={[input, { flex: 1 }]} /></View>
           <Pressable onPress={() => void runSimulation()} style={{ backgroundColor: colors.teal, borderRadius: 14, paddingVertical: 14, alignItems: "center", marginTop: 5 }}>
             <Text style={{ color: "white", fontWeight: "800" }}>CHECK MY RULES</Text>
           </Pressable>
@@ -126,8 +138,8 @@ export default function HomeScreen() {
         <View style={card}>
           <View style={rowBetween}><Text style={heading}>Your rules</Text><Pressable onPress={() => router.push("/rules")}><Text style={{ color: "#087D70", fontWeight: "700" }}>Settings →</Text></Pressable></View>
           <RuleLine title="Selected app" detail={`${settings.targetApp === "jeeny" ? "Jeeny Driver" : "Bolt Driver"} · ${settings.region === "SA" ? "Saudi Arabia" : "Jordan"}`} />
-          <RuleLine title="Excluded destinations" detail={settings.excludedKeywords.join(" · ") || "None"} />
-          <RuleLine title="Preferred destinations" detail={settings.preferredKeywords.join(" · ") || "None · preference never overrides safety rules"} />
+          <RuleLine title="Excluded areas" detail={`${settings.excludedAreas.length}/5 circles · ${settings.excludedAreas.map((area) => area.label).join(" · ") || "None"}`} />
+          <RuleLine title="Preferred area" detail={settings.preferredArea?.label ?? "None · preference never overrides safety rules"} />
         </View>
 
         <View style={card}>
@@ -135,7 +147,7 @@ export default function HomeScreen() {
           <Text style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>{nativeStatus}</Text>
           {activity.length === 0 ? <Text style={{ color: colors.muted, marginTop: 14 }}>No requests checked yet. Simulator checks appear here.</Text> : activity.slice(0, 4).map((item) => <View key={item.id} style={{ borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 11, marginTop: 11 }}><Text style={{ color: item.accepted ? "#087D70" : colors.red, fontWeight: "700" }}>{item.accepted ? "MATCH" : "SKIPPED"} · {item.reason}</Text><Text style={{ color: colors.muted, marginTop: 3 }}>{item.destination ?? "Destination unavailable"}{item.fare !== undefined ? ` · ${settings.currency} ${item.fare}` : ""}</Text></View>)}
         </View>
-        <Text style={{ color: colors.muted, fontSize: 11, lineHeight: 17, marginHorizontal: 4, marginTop: 2 }}>Screen text is processed on this phone and is not sent to HI Acceptor servers. Accessibility access can read screen content and tap controls in the selected driver app. Review the app’s rules before turning automation on.</Text>
+        <Text style={{ color: colors.muted, fontSize: 11, lineHeight: 17, marginHorizontal: 4, marginTop: 2 }}>Screen text stays off HI Acceptor servers. When circles are configured, Android’s system geocoder may receive the visible destination name to resolve its location; the request is skipped if it cannot be uniquely resolved. Accessibility can read and act on the selected driver app. Review the rules before starting.</Text>
       </ScrollView>
     </ScreenContainer>
   );
