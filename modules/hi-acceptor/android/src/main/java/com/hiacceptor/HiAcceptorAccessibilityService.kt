@@ -1,6 +1,7 @@
 package com.hiacceptor
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.NotificationChannel
@@ -45,6 +46,19 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   override fun onServiceConnected() {
     super.onServiceConnected()
     instance = this
+    serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
+      eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+        AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+        AccessibilityEvent.TYPE_VIEW_CLICKED or
+        AccessibilityEvent.TYPE_VIEW_SCROLLED or
+        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+        AccessibilityEvent.TYPE_VIEW_FOCUSED
+      feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+      flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+      notificationTimeout = 200
+      packageNames = arrayOf(JEENY)
+    }
     refreshConfiguration()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -150,6 +164,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         return
       }
     }
+    if (root != null && tapOfferCloseFallback()) {
+      lastFingerprint = fingerprint
+      lastTapAt = SystemClock.elapsedRealtime()
+      prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+      scheduleMapRecenter()
+      return
+    }
     lastFingerprint = fingerprint
     prefs.edit().putString("lastEvent", "Skipped: $reason; no clear decline control was available").apply()
   }
@@ -187,6 +208,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (excludedMatch != null) {
       val rejectNode = findRejectNode(root, allowTopRightIcon = true)
       if (rejectNode == null) {
+        if (tapOfferCloseFallback()) {
+          lastFingerprint = currentFingerprint
+          lastTapAt = SystemClock.elapsedRealtime()
+          prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+          scheduleMapRecenter()
+          return
+        }
         prefs.edit().putString("lastEvent", "Skipped: ride is in excluded area '${excludedMatch.label}', but no explicit decline control was found").apply()
         lastFingerprint = currentFingerprint
         scheduleDeclineRetry(excludedMatch.label, currentFingerprint, 400L)
@@ -195,6 +223,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       }
       val declined = if (rejectNode.isClickable) rejectNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(rejectNode)
       if (declined) {
+        lastFingerprint = currentFingerprint
+        lastTapAt = SystemClock.elapsedRealtime()
+        prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        scheduleMapRecenter()
+      } else if (tapOfferCloseFallback()) {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
@@ -214,8 +247,14 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
     val point = points.firstOrNull()
     val isPreferred = point != null && preferred != null && insideCircle(point.first, point.second, preferred)
-    val button = findAcceptNode(root) ?: run {
-      prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
+    val button = findAcceptNode(root)
+    if (button == null) {
+      if (tapAcceptFallback()) {
+        lastFingerprint = currentFingerprint
+        lastTapAt = SystemClock.elapsedRealtime()
+        prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
+        notifyAccepted()
+      } else prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
       return
     }
     val clicked = if (button.isClickable) button.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(button)
@@ -223,6 +262,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", if (isPreferred) "Accepted a matching request inside preferred area '${preferred?.label}'" else "Accepted a request matching all configured rules").apply()
+      notifyAccepted()
+    } else if (tapAcceptFallback()) {
+      lastFingerprint = currentFingerprint
+      lastTapAt = SystemClock.elapsedRealtime()
+      prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
       notifyAccepted()
     } else prefs.edit().putString("lastEvent", "Skipped: accept control could not be activated").apply()
   }
@@ -233,7 +277,16 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       if (!prefs.getBoolean("operationEnabled", false)) return@postDelayed
       val root = rootInActiveWindow ?: return@postDelayed
       if (root.packageName?.toString() != JEENY) return@postDelayed
-      val node = findRejectNode(root, allowTopRightIcon = true) ?: return@postDelayed
+      val node = findRejectNode(root, allowTopRightIcon = true)
+      if (node == null) {
+        if (tapOfferCloseFallback()) {
+          lastFingerprint = fingerprint
+          lastTapAt = SystemClock.elapsedRealtime()
+          prefs.edit().putString("lastEvent", "Declined a request inside excluded area '$label'").apply()
+          scheduleMapRecenter()
+        }
+        return@postDelayed
+      }
       val clicked = if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(node)
       if (clicked) {
         lastFingerprint = fingerprint
@@ -268,7 +321,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   }
 
   private fun parseDetails(text: String): Parsed? {
-    val fareRegex = Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)[^0-9﷼]{0,24}(?:﷼|SAR|SR|ر\\.س)?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.س)?", RegexOption.IGNORE_CASE)
+    val fareRegex = Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)[^0-9﷼]{0,36}(?:﷼|SAR|SR|ر\\.س)?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.س)?", RegexOption.IGNORE_CASE)
     val pickupRegex = Regex("(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)\\D{0,20}(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)", RegexOption.IGNORE_CASE)
     val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
     val fare = fareRegex.find(text) ?: return null
@@ -276,7 +329,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotBlank) ?: return null
     val currencyToken = when {
       fare.groupValues[2].isNotBlank() -> fare.groupValues[2]
-      fare.value.contains("﷼") || fare.value.contains("SAR", true) || fare.value.contains("SR", true) || fare.value.contains("ر.س") -> "SAR"
+      fare.value.contains("﷼") || fare.value.contains("SAR", true) || fare.value.contains("SR", true) || fare.value.contains("ر.س") || fare.value.contains("you'll", true) || fare.value.contains("you’ll", true) -> "SAR"
       else -> ""
     }
     if (currencyToken.isBlank()) return null
@@ -435,6 +488,17 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 80)).build()
     return dispatchGesture(gesture, null, null)
   }
+
+  private fun tapScreenFraction(x: Float, y: Float): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+    val path = Path().apply { moveTo(resources.displayMetrics.widthPixels * x, resources.displayMetrics.heightPixels * y) }
+    val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 80)).build()
+    return dispatchGesture(gesture, null, null)
+  }
+
+  private fun tapOfferCloseFallback(): Boolean = tapScreenFraction(0.885f, 0.555f)
+
+  private fun tapAcceptFallback(): Boolean = tapScreenFraction(0.50f, 0.945f)
 
   override fun onInterrupt() {}
 
