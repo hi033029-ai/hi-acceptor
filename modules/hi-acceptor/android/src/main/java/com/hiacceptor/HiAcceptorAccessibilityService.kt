@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -39,6 +40,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private var lastTapAt = 0L
   private var lastOnlineAttemptAt = 0L
   private var lastGeocodeAt = 0L
+  private var lastToastAt = 0L
   private var settings = JSONObject()
   private val geocoderExecutor = Executors.newSingleThreadExecutor()
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -54,6 +56,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       packageNames = arrayOf(JEENY)
     }
     refreshConfiguration()
+    showStatusToast("HI Acceptor connected")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
       manager.createNotificationChannel(NotificationChannel("hi_acceptor_matches", "Accepted ride requests", NotificationManager.IMPORTANCE_DEFAULT))
@@ -86,6 +89,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val allText = collectText(root).joinToString(" | ").take(5000)
     if (allText.isBlank()) return
     if (!isJeenyOfferCard(allText)) return
+    showStatusToast("Scanning ride…", 1200L)
     val candidate = parseDetails(allText)
     val parsed = candidate?.takeIf(::matchesRules)
     val excluded = readCircles("excludedAreas")
@@ -152,6 +156,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+        showStatusToast("Declined: $reason")
         scheduleMapRecenter()
         return
       }
@@ -160,6 +165,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       lastFingerprint = fingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+      showStatusToast("Declined: $reason")
       scheduleMapRecenter()
       return
     }
@@ -204,6 +210,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
           lastFingerprint = currentFingerprint
           lastTapAt = SystemClock.elapsedRealtime()
           prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+          showStatusToast("Declined: excluded area")
           scheduleMapRecenter()
           return
         }
@@ -218,11 +225,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        showStatusToast("Declined: excluded area")
         scheduleMapRecenter()
       } else if (tapOfferCloseFallback()) {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        showStatusToast("Declined: excluded area")
         scheduleMapRecenter()
       } else prefs.edit().putString("lastEvent", "Skipped: excluded-area decline control could not be activated").apply()
       return
@@ -245,6 +254,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
+        showStatusToast("Accepted matching ride")
         notifyAccepted()
       } else prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
       return
@@ -254,11 +264,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", if (isPreferred) "Accepted a matching request inside preferred area '${preferred?.label}'" else "Accepted a request matching all configured rules").apply()
+      showStatusToast("Accepted matching ride")
       notifyAccepted()
     } else if (tapAcceptFallback()) {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
+      showStatusToast("Accepted matching ride")
       notifyAccepted()
     } else prefs.edit().putString("lastEvent", "Skipped: accept control could not be activated").apply()
   }
@@ -491,6 +503,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private fun tapOfferCloseFallback(): Boolean = tapScreenFraction(0.885f, 0.555f)
 
   private fun tapAcceptFallback(): Boolean = tapScreenFraction(0.50f, 0.945f)
+
+  private fun showStatusToast(message: String, cooldownMs: Long = 2500L) {
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastToastAt < cooldownMs) return
+    lastToastAt = now
+    mainHandler.post { Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show() }
+  }
 
   override fun onInterrupt() {}
 
