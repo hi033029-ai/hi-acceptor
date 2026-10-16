@@ -146,6 +146,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+        scheduleMapRecenter()
         return
       }
     }
@@ -198,6 +199,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        scheduleMapRecenter()
       } else prefs.edit().putString("lastEvent", "Skipped: excluded-area decline control could not be activated").apply()
       return
     }
@@ -238,8 +240,32 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '$label'").apply()
+        scheduleMapRecenter()
       }
     }, delayMs)
+  }
+
+  private fun scheduleMapRecenter() {
+    mainHandler.postDelayed({
+      val root = rootInActiveWindow ?: return@postDelayed
+      if (root.packageName?.toString() != JEENY) return@postDelayed
+      val node = findMapRecenterNode(root) ?: return@postDelayed
+      val clicked = if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(node)
+      if (clicked) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Declined excluded ride and recentered Jeeny map").apply()
+    }, 400L)
+  }
+
+  private fun findMapRecenterNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    val description = node.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+    val resourceId = node.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
+    val recenterLabel = listOf("my location", "current location", "your location", "recenter", "موقعي", "موقعك", "الموقع الحالي").any(description::contains)
+    val recenterResource = listOf("my_location", "current_location", "recenter", "location_button", "user_location").any(resourceId::contains)
+    if ((recenterLabel || recenterResource) && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
+    for (index in 0 until node.childCount) {
+      val child = node.getChild(index) ?: continue
+      findMapRecenterNode(child)?.let { return it }
+    }
+    return null
   }
 
   private fun parseDetails(text: String): Parsed? {
