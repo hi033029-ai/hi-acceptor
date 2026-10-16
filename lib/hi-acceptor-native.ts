@@ -1,15 +1,24 @@
-import { NativeModules, Platform } from "react-native";
+import { Platform } from "react-native";
+import { requireNativeModule } from "expo-modules-core";
 import type { RideSettings } from "@/lib/ride-rules";
 
 type NativeAcceptor = {
   isAccessibilityEnabled(): Promise<boolean>;
   openAccessibilitySettings(): Promise<void>;
+  launchJeeny(): Promise<void>;
   setOperationEnabled(enabled: boolean): Promise<void>;
-  saveSettings(settings: RideSettings & { targetPackage: string }): Promise<void>;
+  saveSettings(settingsJson: string): Promise<void>;
   getStatus(): Promise<{ enabled: boolean; accessibilityEnabled: boolean; lastEvent?: string }>;
 };
 
-const native = NativeModules.HiAcceptor as NativeAcceptor | undefined;
+const native = (() => {
+  if (Platform.OS !== "android") return undefined;
+  try {
+    return requireNativeModule<NativeAcceptor>("HiAcceptor");
+  } catch {
+    return undefined;
+  }
+})();
 export const hasNativeAcceptor = Platform.OS === "android" && Boolean(native);
 
 export async function isAccessibilityEnabled() {
@@ -24,8 +33,12 @@ export async function setOperationEnabled(enabled: boolean) {
   if (hasNativeAcceptor) await native!.setOperationEnabled(enabled);
 }
 
+export async function launchJeeny() {
+  if (hasNativeAcceptor) await native!.launchJeeny();
+}
+
 export async function saveNativeSettings(settings: RideSettings & { targetPackage: string }) {
-  if (hasNativeAcceptor) await native!.saveSettings(settings);
+  if (hasNativeAcceptor) await native!.saveSettings(JSON.stringify(settings));
 }
 
 export async function getNativeStatus() {

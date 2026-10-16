@@ -1,167 +1,278 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppState, Alert, BackHandler, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
-import { Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import Constants from "expo-constants";
 import { ScreenContainer } from "@/components/screen-container";
-import { evaluateRide, type Decision } from "@/lib/ride-rules";
-import { DEFAULT_SETTINGS, addActivity, loadActivity, loadOperationEnabled, loadSettings, saveOperationEnabled, type ActivityItem, type StoredSettings } from "@/lib/hi-acceptor-store";
-import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, openAccessibilitySettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
+import { AreaPicker } from "@/components/AreaPicker";
+import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, launchJeeny, openAccessibilitySettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
+import { DEFAULT_SETTINGS, MAX_EXCLUDED_AREAS, createArea, loadOperationEnabled, loadSettings, saveOperationEnabled, saveSettings, type StoredSettings } from "@/lib/hi-acceptor-store";
+import type { AreaCircle } from "@/lib/ride-rules";
+import { languageNames, loadLanguage, saveLanguage, translations, type AppLanguage } from "@/lib/i18n";
 
-const colors = { ink: "#102532", muted: "#5E707A", paper: "#F3F6F5", card: "#FFFFFF", teal: "#20B7A5", line: "#DDE6E4", amber: "#A56512", red: "#B34842" };
-const supported = { jeeny: "me.com.easytaxista", bolt: "ee.mtakso.driver" } as const;
+const ink = "#102532";
+const muted = "#5E707A";
+const teal = "#20B7A5";
+const tealDark = "#087D70";
+const border = "#DDE6E4";
+const red = "#B34842";
+const supported = { jeeny: "me.com.easytaxista" } as const;
+const mapsApiKey = String(Constants.expoConfig?.extra?.googleMapsApiKey ?? "");
+
+type PermissionState = { accessibility: boolean; foreground: boolean; background: boolean };
+
+type EditingArea = { existing?: AreaCircle; draft: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">; label: string };
 
 export default function HomeScreen() {
-  const router = useRouter();
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [permissions, setPermissions] = useState<PermissionState>({ accessibility: false, foreground: false, background: false });
   const [enabled, setEnabled] = useState(false);
-  const [permission, setPermission] = useState(false);
-  const [nativeStatus, setNativeStatus] = useState("Checking native status…");
-  const [fare, setFare] = useState("24");
-  const [pickup, setPickup] = useState("4");
-  const [destination, setDestination] = useState("City Center");
-  const [destinationLatitude, setDestinationLatitude] = useState("");
-  const [destinationLongitude, setDestinationLongitude] = useState("");
-  const [decision, setDecision] = useState<Decision | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [editingArea, setEditingArea] = useState<EditingArea | null>(null);
+  const [language, setLanguage] = useState<AppLanguage | null>(null);
+  const [languageDraft, setLanguageDraft] = useState<AppLanguage>("en");
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const text = translations[language ?? "en"];
+
+  const queuePersist = (next: StoredSettings) => {
+    const task = saveQueueRef.current.catch(() => undefined).then(async () => {
+      await saveSettings(next);
+      await saveNativeSettings({ ...next, targetPackage: supported[next.targetApp] });
+    });
+    saveQueueRef.current = task;
+    return task;
+  };
 
   const refresh = useCallback(async () => {
-    const [storedSettings, items, storedEnabled, accessibility, status] = await Promise.all([
-      loadSettings(), loadActivity(), loadOperationEnabled(), isAccessibilityEnabled(), getNativeStatus(),
+    await saveQueueRef.current.catch(() => undefined);
+    const [stored, storedEnabled, accessibility, nativeStatus, foreground, background] = await Promise.all([
+      loadSettings(), loadOperationEnabled(), isAccessibilityEnabled(), getNativeStatus(),
+      Location.getForegroundPermissionsAsync().catch(() => ({ status: "denied" as const })),
+      Location.getBackgroundPermissionsAsync().catch(() => ({ status: "denied" as const })),
     ]);
-    setSettings(storedSettings);
-    setActivity(items);
-    setPermission(accessibility);
-    setEnabled(hasNativeAcceptor && accessibility && storedEnabled && status.enabled);
-    setNativeStatus(hasNativeAcceptor ? (status.lastEvent ?? "No request processed yet") : "Simulator only · Native Android build required to use Accessibility");
-    if (hasNativeAcceptor) await saveNativeSettings({ ...storedSettings, targetPackage: supported[storedSettings.targetApp] });
+    setSettings(stored);
+    setPermissions({ accessibility, foreground: foreground.status === "granted", background: background.status === "granted" });
+    setEnabled(hasNativeAcceptor && accessibility && storedEnabled && nativeStatus.enabled);
+    if (hasNativeAcceptor) await saveNativeSettings({ ...stored, targetPackage: supported[stored.targetApp] });
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => { void refresh(); }, 0);
-    return () => clearTimeout(timer);
+    void loadLanguage().then((stored) => {
+      if (stored) {
+        setLanguage(stored);
+        setLanguageDraft(stored);
+      }
+    });
+    void refresh();
+    const subscription = AppState.addEventListener("change", (state) => { if (state === "active") void refresh(); });
+    return () => subscription.remove();
   }, [refresh]);
 
-  const simulated = useMemo(() => evaluateRide({ fare: Number(fare), currency: settings.currency, pickupMinutes: Number(pickup), destination, text: "Preview", ...(destinationLatitude !== "" && destinationLongitude !== "" ? { destinationLatitude: Number(destinationLatitude), destinationLongitude: Number(destinationLongitude) } : {}) }, settings), [fare, pickup, destination, destinationLatitude, destinationLongitude, settings]);
+  const continueWithLanguage = async () => {
+    await saveLanguage(languageDraft);
+    setLanguage(languageDraft);
+  };
 
-  const toggleOperation = async () => {
-    if (!enabled && (!Number.isFinite(settings.minFare) || !Number.isFinite(settings.maxFare) || settings.maxFare <= settings.minFare)) {
-      Alert.alert("Set your fare range", "Enter your own minimum and maximum fares in Rules before starting automation.");
-      router.push("/rules");
+  useEffect(() => {
+    if (!editingArea || Platform.OS !== "android") return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      setEditingArea(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [editingArea]);
+
+  const validRules = useMemo(() => settings.minFare >= 0 && settings.maxFare > settings.minFare && settings.maxPickupMinutes > 0, [settings]);
+  const update = <K extends keyof StoredSettings>(key: K, value: StoredSettings[K]) => setSettings((current) => {
+    const next = { ...current, [key]: value };
+    void queuePersist(next).catch(() => undefined);
+    return next;
+  });
+
+  const requestLocation = async () => {
+    const foreground = await Location.requestForegroundPermissionsAsync();
+    if (foreground.status !== "granted") {
+      Alert.alert("Location permission required", "Allow location while using the app first. Android requires this before background location can be requested.");
+      await refresh();
+      return false;
+    }
+    const background = await Location.requestBackgroundPermissionsAsync();
+    if (background.status !== "granted") {
+      Alert.alert("Background location not enabled", "Open Android settings and allow HI Acceptor to use location all the time, then press Start again.");
+    }
+    await refresh();
+    return background.status === "granted";
+  };
+
+  const openAccessibility = async () => {
+    if (!hasNativeAcceptor) {
+      Alert.alert("Install the Android APK", "Accessibility settings can only be opened from the native ARM64 Android app. This web preview cannot control Android settings or other apps.");
+      return;
+    }
+    await openAccessibilitySettings();
+  };
+
+  const save = async () => {
+    if (!validRules) {
+      Alert.alert("Complete your ride rules", "Set a minimum fare, a higher maximum fare, and a pickup-time limit before saving.");
+      return false;
+    }
+    try {
+      await queuePersist(settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+      return true;
+    } catch {
+      Alert.alert("Rules saved locally, Android sync failed", "Your rules are stored on this device, but the native Accessibility service did not receive them. Install the latest APK and try Save Rules again.");
+      return false;
+    }
+  };
+
+  const persistSettings = async (next: StoredSettings) => {
+    setSettings(next);
+    await queuePersist(next);
+  };
+
+  const toggleAutomation = async () => {
+    if (enabled) {
+      await saveOperationEnabled(false);
+      await setOperationEnabled(false);
+      setEnabled(false);
       return;
     }
     if (!hasNativeAcceptor) {
-      Alert.alert("Android build required", "The web preview is a simulator. Install a native Android build and enable HI Acceptor in Android Accessibility settings before starting auto-accept.");
+      Alert.alert("Install the Android APK", "Automation works only in the native ARM64 Android build, not in the web preview.");
       return;
     }
-    if (!permission) {
-      Alert.alert("Permission needed", "Enable the HI Acceptor Accessibility service in Android Settings. It is used only for the driver app you selected.", [
-        { text: "Not now", style: "cancel" }, { text: "Open settings", onPress: () => { void openAccessibilitySettings(); } },
-      ]);
+    if (!permissions.accessibility) {
+      Alert.alert("Enable Accessibility", "On Xiaomi, allow restricted settings first if Android blocks this service. Then enable HI Acceptor ride request assistant under Downloaded apps.", [{ text: "Cancel", style: "cancel" }, { text: "Open settings", onPress: () => void openAccessibility() }]);
       return;
     }
-    const next = !enabled;
-    if (next && Platform.OS === "android") {
-      try { await Notifications.requestPermissionsAsync(); } catch { /* Alerts are optional; operation does not depend on them. */ }
+    try {
+      if (!permissions.foreground || !permissions.background) {
+        if (!(await requestLocation())) return;
+      }
+      if (!(await save())) return;
+      if (Platform.OS === "android") await Notifications.requestPermissionsAsync().catch(() => undefined);
+      await saveOperationEnabled(true);
+      await setOperationEnabled(true);
+      await launchJeeny();
+      setEnabled(true);
+    } catch (error) {
+      await saveOperationEnabled(false).catch(() => undefined);
+      await setOperationEnabled(false).catch(() => undefined);
+      setEnabled(false);
+      const detail = error instanceof Error ? error.message : String(error);
+      Alert.alert("Could not start automation", `${detail || "The native Jeeny launch failed."}\n\nConfirm Jeeny Driver is installed, then try Start again.`);
     }
-    await saveOperationEnabled(next);
-    await setOperationEnabled(next);
-    setEnabled(next);
   };
 
-  const runSimulation = async () => {
-    setDecision(simulated);
-    const record: ActivityItem = {
-      id: `${Date.now()}`, at: new Date().toISOString(), accepted: simulated.eligible,
-      reason: `Simulator: ${simulated.reason}`, fare: Number(fare), destination,
-    };
-    await addActivity(record);
-    setActivity((previous) => [record, ...previous].slice(0, 50));
+  const beginAddArea = () => {
+    if (settings.excludedAreas.length >= MAX_EXCLUDED_AREAS) {
+      Alert.alert("Maximum reached", `You can exclude up to ${MAX_EXCLUDED_AREAS} map areas.`);
+      return;
+    }
+    const center = settings.region === "SA" ? { latitude: 24.7136, longitude: 46.6753 } : { latitude: 31.9539, longitude: 35.9106 };
+    setEditingArea({ draft: { ...center, radiusMeters: 1000 }, label: "" });
   };
 
-  return (
-    <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-5 pt-3">
-      <ScrollView contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
-          <View>
-            <Text style={{ color: colors.ink, fontSize: 27, fontWeight: "800", letterSpacing: -0.7 }}>HI Acceptor</Text>
-            <Text style={{ color: colors.muted, fontSize: 13, marginTop: 3 }}>Your rules. Your choice.</Text>
-          </View>
-          <View style={{ backgroundColor: "#DDF5F1", paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20 }}>
-            <Text style={{ color: "#087D70", fontSize: 12, fontWeight: "700" }}>FREE · ON-DEVICE</Text>
-          </View>
-        </View>
+  const saveArea = async () => {
+    if (!editingArea) return;
+    const { latitude, longitude, radiusMeters } = editingArea.draft;
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180 || radiusMeters < 250 || radiusMeters > 10000) {
+      Alert.alert("Invalid map area", "Choose a point on the map and keep the radius between 250 m and 10 km.");
+      return;
+    }
+    const created = createArea(latitude, longitude, radiusMeters, editingArea.label || `Excluded area ${settings.excludedAreas.length + 1}`);
+    const nextSettings = { ...settings, excludedAreas: [...settings.excludedAreas, created].slice(0, MAX_EXCLUDED_AREAS) };
+    await persistSettings(nextSettings);
+    setEditingArea(null);
+  };
 
-        <View style={{ backgroundColor: colors.ink, borderRadius: 24, padding: 22, marginBottom: 14 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-            <View>
-              <Text style={{ color: "#A8C4C4", fontSize: 12, fontWeight: "700", letterSpacing: 1 }}>AUTOMATION</Text>
-              <Text style={{ color: "white", fontSize: 23, fontWeight: "800", marginTop: 7 }}>{enabled ? "Active" : "Stopped"}</Text>
-            </View>
-            <Pressable onPress={() => void toggleOperation()} accessibilityRole="switch" accessibilityState={{ checked: enabled }} style={{ backgroundColor: enabled ? colors.teal : "#40545D", borderRadius: 24, paddingVertical: 13, paddingHorizontal: 19 }}>
-              <Text style={{ color: "white", fontSize: 14, fontWeight: "800" }}>{enabled ? "STOP" : "START"}</Text>
-            </Pressable>
-          </View>
-          <Text style={{ color: "#C8D7D8", lineHeight: 20, fontSize: 13, marginTop: 15 }}>
-            {enabled ? `Watching ${settings.targetApp === "jeeny" ? "Jeeny Driver" : "Bolt Driver"}. Stop any time.` : "Automation stays off until you explicitly enable Android Accessibility and press Start."}
-          </Text>
-          <View style={{ height: 1, backgroundColor: "#42555D", marginVertical: 15 }} />
-          <Text style={{ color: permission ? "#80E3D3" : "#FFD28A", fontSize: 12, fontWeight: "700" }}>
-            {hasNativeAcceptor ? (permission ? "ACCESSIBILITY PERMISSION ON" : "ACCESSIBILITY PERMISSION OFF") : "PREVIEW MODE · SIMULATOR ONLY"}
-          </Text>
-          {!permission && hasNativeAcceptor && <Pressable onPress={() => void openAccessibilitySettings()} style={{ marginTop: 10 }}><Text style={{ color: "#A9EDE4", fontWeight: "700" }}>Open Android Accessibility settings →</Text></Pressable>}
-        </View>
+  const removeArea = async (id: string) => {
+    await persistSettings({ ...settings, excludedAreas: settings.excludedAreas.filter((area) => area.id !== id) });
+  };
 
-        <View style={{ flexDirection: "row", gap: 10, marginBottom: 14 }}>
-          <Metric label="FARE RANGE" value={settings.maxFare > settings.minFare ? `${settings.currency} ${settings.minFare}–${settings.maxFare}` : "Set your limits"} />
-          <Metric label="PICKUP LIMIT" value={`${settings.maxPickupMinutes} min`} />
-        </View>
+  if (!language) return <WelcomeScreen selected={languageDraft} onSelect={setLanguageDraft} onContinue={() => void continueWithLanguage()} />;
 
-        <View style={card}>
-          <View style={rowBetween}><Text style={heading}>Rule preview</Text><Text style={{ color: colors.muted, fontSize: 12 }}>No real ride is tapped here</Text></View>
-          <Text style={label}>FARE ({settings.currency})</Text>
-          <TextInput value={fare} onChangeText={setFare} keyboardType="decimal-pad" style={input} accessibilityLabel="Simulator fare" />
-          <Text style={label}>PICKUP TIME (MINUTES)</Text>
-          <TextInput value={pickup} onChangeText={setPickup} keyboardType="decimal-pad" style={input} accessibilityLabel="Simulator pickup time" />
-          <Text style={label}>DESTINATION</Text>
-          <TextInput value={destination} onChangeText={setDestination} style={input} accessibilityLabel="Simulator destination" />
-          <Text style={label}>DESTINATION LATITUDE / LONGITUDE (FOR CIRCLE TEST)</Text>
-          <View style={{ flexDirection: "row", gap: 8 }}><TextInput value={destinationLatitude} onChangeText={setDestinationLatitude} placeholder="Latitude" keyboardType="decimal-pad" style={[input, { flex: 1 }]} /><TextInput value={destinationLongitude} onChangeText={setDestinationLongitude} placeholder="Longitude" keyboardType="decimal-pad" style={[input, { flex: 1 }]} /></View>
-          <Pressable onPress={() => void runSimulation()} style={{ backgroundColor: colors.teal, borderRadius: 14, paddingVertical: 14, alignItems: "center", marginTop: 5 }}>
-            <Text style={{ color: "white", fontWeight: "800" }}>CHECK MY RULES</Text>
-          </Pressable>
-          {decision && <View style={{ backgroundColor: decision.eligible ? "#E2F5F1" : "#FFF0ED", padding: 13, borderRadius: 12, marginTop: 12 }}>
-            <Text style={{ color: decision.eligible ? "#087D70" : colors.red, fontWeight: "800" }}>{decision.eligible ? "MATCH" : "DO NOT ACCEPT"}{decision.preferred ? " · PREFERRED" : ""}</Text>
-            <Text style={{ color: colors.ink, marginTop: 4 }}>{decision.reason}</Text>
-          </View>}
-        </View>
-
-        <View style={card}>
-          <View style={rowBetween}><Text style={heading}>Your rules</Text><Pressable onPress={() => router.push("/rules")}><Text style={{ color: "#087D70", fontWeight: "700" }}>Settings →</Text></Pressable></View>
-          <RuleLine title="Selected app" detail={`${settings.targetApp === "jeeny" ? "Jeeny Driver" : "Bolt Driver"} · ${settings.region === "SA" ? "Saudi Arabia" : "Jordan"}`} />
-          <RuleLine title="Excluded areas" detail={`${settings.excludedAreas.length}/5 circles · ${settings.excludedAreas.map((area) => area.label).join(" · ") || "None"}`} />
-          <RuleLine title="Preferred area" detail={settings.preferredArea?.label ?? "None · preference never overrides safety rules"} />
-        </View>
-
-        <View style={card}>
-          <View style={rowBetween}><Text style={heading}>On-device activity</Text><Text style={{ color: colors.muted, fontSize: 12 }}>Last 50</Text></View>
-          <Text style={{ color: colors.muted, fontSize: 12, marginTop: 4 }}>{nativeStatus}</Text>
-          {activity.length === 0 ? <Text style={{ color: colors.muted, marginTop: 14 }}>No requests checked yet. Simulator checks appear here.</Text> : activity.slice(0, 4).map((item) => <View key={item.id} style={{ borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 11, marginTop: 11 }}><Text style={{ color: item.accepted ? "#087D70" : colors.red, fontWeight: "700" }}>{item.accepted ? "MATCH" : "SKIPPED"} · {item.reason}</Text><Text style={{ color: colors.muted, marginTop: 3 }}>{item.destination ?? "Destination unavailable"}{item.fare !== undefined ? ` · ${settings.currency} ${item.fare}` : ""}</Text></View>)}
-        </View>
-        <Text style={{ color: colors.muted, fontSize: 11, lineHeight: 17, marginHorizontal: 4, marginTop: 2 }}>Screen text stays off HI Acceptor servers. When circles are configured, Android’s system geocoder may receive the visible destination name to resolve its location; the request is skipped if it cannot be uniquely resolved. Accessibility can read and act on the selected driver app. Review the rules before starting.</Text>
+  if (editingArea) {
+    const preview: AreaCircle = { id: "new-area", label: editingArea.label, ...editingArea.draft };
+    return <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-4 pt-3">
+      <ScrollView contentContainerStyle={{ paddingBottom: 30 }}>
+        <View style={rowBetween}><View><Text style={brand}>{text.excludeTitle}</Text><Text style={subtitle}>{text.excludeSubtitle}</Text></View><Pressable onPress={() => setEditingArea(null)}><Text style={{ color: red, fontWeight: "800" }}>{text.cancel}</Text></Pressable></View>
+        <View style={{ marginTop: 18 }}><AreaPicker key="new-exclusion" area={preview} region={settings.region} mapsApiKey={mapsApiKey} onChange={(point) => setEditingArea((current) => current ? { ...current, draft: point } : current)} /></View>
+        <Text style={label}>EXCLUSION LABEL</Text>
+        <TextInput value={editingArea.label} onChangeText={(label) => setEditingArea((current) => current ? { ...current, label } : current)} placeholder="e.g. Airport or downtown" style={input} />
+        <Pressable onPress={saveArea} style={primaryButton}><Text style={primaryText}>{text.saveExcluded}</Text></Pressable>
       </ScrollView>
-    </ScreenContainer>
-  );
+    </ScreenContainer>;
+  }
+
+  return <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-4 pt-3">
+    <ScrollView contentContainerStyle={{ paddingBottom: 34 }} showsVerticalScrollIndicator={false}>
+      <View style={{ marginBottom: 18 }}><Text style={brand}>HI Acceptor</Text><Text style={subtitle}>{text.homeSubtitle}</Text></View>
+
+      <View style={{ backgroundColor: ink, borderRadius: 22, padding: 19, marginBottom: 12 }}>
+        <View style={rowBetween}><View><Text style={{ color: "#A8C4C4", fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>{text.automation}</Text><Text style={{ color: "white", fontSize: 24, fontWeight: "800", marginTop: 5 }}>{enabled ? text.running : text.stopped}</Text></View><Pressable onPress={() => void toggleAutomation()} style={{ backgroundColor: enabled ? red : teal, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 18 }}><Text style={{ color: "white", fontWeight: "900" }}>{enabled ? text.stop : text.start}</Text></Pressable></View>
+      </View>
+
+      <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>
+        <PermissionRow label={text.accessibility} granted={permissions.accessibility} action={() => void openAccessibility()} actionLabel={text.openSettings} />
+        <PermissionRow label={text.locationForeground} granted={permissions.foreground} action={() => void requestLocation()} actionLabel={text.allow} />
+        <PermissionRow label={text.locationBackground} granted={permissions.background} action={() => void requestLocation()} actionLabel={text.allow} />
+        <Text style={finePrint}>Accessibility reads only the selected driver app. Location permission is used for live location services and Android background operation. You can revoke permissions in Android Settings.</Text>
+      </View>
+
+      <View style={card}><Text style={title}>{text.rideCriteria}</Text><Text style={helper}>{text.criteriaHelp} Otherwise it is skipped or declined when the driver app exposes a clear decline control.</Text>
+        <Text style={label}>{text.driverApp}</Text><View style={{ flexDirection: "row" }}><Choice label="Jeeny Driver" selected onPress={() => update("targetApp", "jeeny")} /></View>
+        <Text style={label}>{text.regionCurrency}</Text><View style={{ flexDirection: "row" }}><Choice label="Saudi Arabia · SAR" selected onPress={() => { update("region", "SA"); update("currency", "SAR"); }} /></View>
+        <Field label={`${text.minFare} (${settings.currency})`} value={settings.minFare ? String(settings.minFare) : ""} placeholder="0" onChange={(value) => update("minFare", Number(value) || 0)} />
+        <Field label={`${text.maxFare} (${settings.currency})`} value={settings.maxFare ? String(settings.maxFare) : ""} placeholder="0" onChange={(value) => update("maxFare", Number(value) || 0)} />
+        <Field label={text.maxPickup} value={String(settings.maxPickupMinutes)} placeholder="5" onChange={(value) => update("maxPickupMinutes", Number(value) || 0)} />
+      </View>
+
+      <View style={card}><View style={rowBetween}><Text style={title}>{text.exclude}</Text><Text style={{ color: tealDark, fontWeight: "900" }}>{settings.excludedAreas.length}/{MAX_EXCLUDED_AREAS}</Text></View><Text style={helper}>{text.excludeHelp}</Text>
+        {settings.excludedAreas.map((area) => <View key={area.id} style={areaRow}><View style={rowBetween}><Text style={{ color: ink, fontWeight: "800", flex: 1 }}>{area.label}</Text><Pressable onPress={() => void removeArea(area.id)}><Text style={{ color: red, fontWeight: "800" }}>{text.remove}</Text></Pressable></View><Text style={{ color: muted, fontSize: 11, marginTop: 4 }}>{area.latitude.toFixed(5)}, {area.longitude.toFixed(5)} · {area.radiusMeters >= 1000 ? `${(area.radiusMeters / 1000).toFixed(area.radiusMeters % 1000 ? 1 : 0)} km` : `${area.radiusMeters} m`}</Text></View>)}
+        <Pressable onPress={beginAddArea} style={secondaryButton}><Text style={{ color: tealDark, fontWeight: "900" }}>{text.chooseExcluded}</Text></Pressable>
+        {!mapsApiKey && <Text style={{ color: "#9A661C", fontSize: 11, lineHeight: 16, marginTop: 10 }}>Google Maps API key is not configured. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY before building to enable the live Google map picker.</Text>}
+      </View>
+
+      <Pressable onPress={() => void save()} style={primaryButton}><Text style={primaryText}>{saved ? text.saved : text.saveRules}</Text></Pressable>
+      <Text style={finePrint}>When started, the service reads the visible ride request in the selected driver app. It accepts only matching fare, pickup-time, currency, and destination rules. Unclear requests are never guessed.</Text>
+    </ScrollView>
+  </ScreenContainer>;
 }
 
-const card = { backgroundColor: "#FFFFFF", borderRadius: 20, padding: 17, marginBottom: 13, borderWidth: 1, borderColor: "#E2EAE8" } as const;
-const heading = { color: colors.ink, fontSize: 16, fontWeight: "800" as const };
-const rowBetween = { flexDirection: "row" as const, justifyContent: "space-between" as const, alignItems: "center" as const };
-const label = { color: colors.muted, fontSize: 10, fontWeight: "800" as const, letterSpacing: 0.8, marginTop: 13, marginBottom: 6 };
-const input = { borderWidth: 1, borderColor: colors.line, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 11, color: colors.ink, fontSize: 15 } as const;
+function WelcomeScreen({ selected, onSelect, onContinue }: { selected: AppLanguage; onSelect: (language: AppLanguage) => void; onContinue: () => void }) {
+  const text = translations[selected];
+  return <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-5 pt-10">
+    <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: "center", paddingBottom: 28 }}>
+      <Text style={brand}>HI Acceptor</Text>
+      <Text style={[title, { fontSize: 25, marginTop: 18 }]}>{text.welcomeTitle}</Text>
+      <Text style={[helper, { fontSize: 16, lineHeight: 25, marginTop: 10 }]}>{text.welcomeBody}</Text>
+      <Text style={[label, { marginTop: 30 }]}>{text.chooseLanguage}</Text>
+      {(["en", "ar", "ur"] as AppLanguage[]).map((item) => <Pressable key={item} onPress={() => onSelect(item)} style={{ borderWidth: 1, borderColor: selected === item ? teal : border, backgroundColor: selected === item ? "#E2F5F1" : "white", borderRadius: 13, padding: 16, marginTop: 10 }}><Text style={{ color: ink, fontWeight: "800", textAlign: item === "ar" || item === "ur" ? "right" : "left" }}>{languageNames[item]}</Text></Pressable>)}
+      <Pressable onPress={onContinue} style={[primaryButton, { marginTop: 26 }]}><Text style={primaryText}>{text.continue}</Text></Pressable>
+    </ScrollView>
+  </ScreenContainer>;
+}
 
-function Metric({ label: metricLabel, value }: { label: string; value: string }) {
-  return <View style={{ flex: 1, backgroundColor: "#FFFFFF", borderRadius: 17, borderColor: colors.line, borderWidth: 1, padding: 15 }}><Text style={{ color: colors.muted, fontSize: 10, fontWeight: "800", letterSpacing: 0.6 }}>{metricLabel}</Text><Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800", marginTop: 6 }}>{value}</Text></View>;
+function PermissionRow({ label: rowLabel, granted, action, actionLabel }: { label: string; granted: boolean; action: () => void; actionLabel: string }) {
+  return <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderTopWidth: 1, borderTopColor: border }}><View style={{ flex: 1 }}><Text style={{ color: ink, fontWeight: "700" }}>{rowLabel}</Text><Text style={{ color: granted ? tealDark : red, fontSize: 11, marginTop: 3, fontWeight: "800" }}>{granted ? "GRANTED" : "NOT GRANTED"}</Text></View>{!granted && <Pressable onPress={action} style={{ borderWidth: 1, borderColor: teal, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11 }}><Text style={{ color: tealDark, fontSize: 11, fontWeight: "900" }}>{actionLabel}</Text></Pressable>}</View>;
 }
-function RuleLine({ title, detail }: { title: string; detail: string }) {
-  return <View style={{ borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 11, marginTop: 11 }}><Text style={{ color: colors.muted, fontSize: 11, fontWeight: "700" }}>{title}</Text><Text style={{ color: colors.ink, fontSize: 14, marginTop: 3 }}>{detail}</Text></View>;
-}
+function Field({ label: fieldLabel, value, placeholder, onChange }: { label: string; value: string; placeholder: string; onChange: (value: string) => void }) { return <View><Text style={label}>{fieldLabel}</Text><TextInput value={value} placeholder={placeholder} onChangeText={onChange} keyboardType="decimal-pad" style={input} /></View>; }
+function Choice({ label: choiceLabel, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) { return <Pressable onPress={onPress} style={{ flex: 1, borderWidth: 1, borderColor: selected ? teal : border, backgroundColor: selected ? "#E2F5F1" : "white", borderRadius: 11, paddingVertical: 11, alignItems: "center" }}><Text style={{ color: selected ? tealDark : ink, fontSize: 12, fontWeight: "800", textAlign: "center" }}>{choiceLabel}</Text></Pressable>; }
+
+const card = { backgroundColor: "white", borderRadius: 19, padding: 16, borderWidth: 1, borderColor: "#E2EAE8", marginBottom: 12 } as const;
+const brand = { color: ink, fontSize: 27, fontWeight: "900" as const, letterSpacing: -0.6 };
+const subtitle = { color: muted, fontSize: 13, marginTop: 4, lineHeight: 18 };
+const title = { color: ink, fontSize: 17, fontWeight: "900" as const };
+const helper = { color: muted, fontSize: 12, lineHeight: 18, marginTop: 6, marginBottom: 6 };
+const finePrint = { color: muted, fontSize: 11, lineHeight: 16, marginTop: 11 };
+const label = { color: muted, fontSize: 10, fontWeight: "900" as const, letterSpacing: 0.7, marginTop: 14, marginBottom: 6 };
+const input = { borderWidth: 1, borderColor: border, borderRadius: 11, paddingHorizontal: 12, paddingVertical: 11, color: ink, fontSize: 15, backgroundColor: "white" } as const;
+const rowBetween = { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "space-between" as const };
+const areaRow = { borderWidth: 1, borderColor: border, borderRadius: 11, padding: 11, marginTop: 8 } as const;
+const primaryButton = { backgroundColor: teal, borderRadius: 14, paddingVertical: 15, alignItems: "center" as const, marginBottom: 12 };
+const secondaryButton = { borderWidth: 1, borderColor: teal, borderRadius: 12, paddingVertical: 13, alignItems: "center" as const, marginTop: 12 };
+const primaryText = { color: "white", fontWeight: "900" as const, letterSpacing: 0.2 };

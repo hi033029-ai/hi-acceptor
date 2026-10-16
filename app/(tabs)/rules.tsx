@@ -43,7 +43,7 @@ export default function RulesScreen() {
     }
     if (settings.excludedAreas.length > MAX_EXCLUDED_AREAS) { Alert.alert("Too many excluded areas", `Choose up to ${MAX_EXCLUDED_AREAS} excluded circles.`); return; }
     await saveSettings(settings);
-    await saveNativeSettings({ ...settings, targetPackage: settings.targetApp === "jeeny" ? "me.com.easytaxista" : "ee.mtakso.driver" });
+    await saveNativeSettings({ ...settings, targetPackage: "me.com.easytaxista" });
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
   };
@@ -64,18 +64,12 @@ export default function RulesScreen() {
         <Text style={title}>Driver app to monitor</Text>
         <Text style={label}>THIS CHOICE ONLY SELECTS WHICH DRIVER APP TO MONITOR. YOUR AREAS ARE MANAGED BELOW IN HI ACCEPTOR.</Text>
         <View style={{ flexDirection: "row", gap: 9, marginTop: 8 }}>
-          <Choice label="Jeeny Driver" selected={settings.targetApp === "jeeny"} onPress={() => update("targetApp", "jeeny")} />
-          <Choice label="Bolt Driver" selected={settings.targetApp === "bolt"} onPress={() => update("targetApp", "bolt")} />
-        </View>
-        <Text style={label}>CURRENCY / REGION</Text>
-        <View style={{ flexDirection: "row", gap: 9, marginTop: 8 }}>
-          <Choice label="Saudi Arabia · SAR" selected={settings.region === "SA"} onPress={() => { update("region", "SA"); update("currency", "SAR"); }} />
-          <Choice label="Jordan · JOD" selected={settings.region === "JO"} onPress={() => { update("region", "JO"); update("currency", "JOD"); }} />
+          <Choice label="Jeeny Driver · Saudi Arabia · SAR" selected onPress={() => { update("targetApp", "jeeny"); update("region", "SA"); update("currency", "SAR"); }} />
         </View>
       </View>
       <View style={card}>
         <View style={rowBetween}><Text style={title}>Excluded circles</Text><Text style={{ color: teal, fontWeight: "800" }}>{settings.excludedAreas.length}/{MAX_EXCLUDED_AREAS}</Text></View>
-        <Text style={helper}>Add up to five circles. Any request inside an excluded circle will be skipped, no matter which supported driver app is selected. Choose each circle in HI Acceptor; this does not open a map in Jeeny, Bolt, or another app.</Text>
+        <Text style={helper}>Add up to five circles. Any Jeeny request inside an excluded circle will be skipped. Choose each circle in HI Acceptor; this does not open a map in Jeeny.</Text>
         {settings.excludedAreas.map((area) => <AreaRow key={area.id} area={area} onEdit={() => openAreaEditor("excluded", area)} onRemove={() => removeExcluded(area.id)} />)}
         {settings.excludedAreas.length < MAX_EXCLUDED_AREAS && <Action label="＋ Add excluded circle" onPress={() => openAreaEditor("excluded")} />}
       </View>

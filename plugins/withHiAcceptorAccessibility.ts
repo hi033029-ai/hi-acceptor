@@ -6,6 +6,15 @@ const SERVICE_NAME = "com.hiacceptor.HiAcceptorAccessibilityService";
 
 const withHiAcceptorAccessibility: ConfigPlugin = (config) => {
   config = withAndroidManifest(config, (mod) => {
+    mod.modResults.manifest.queries ??= [];
+    const queries = mod.modResults.manifest.queries;
+    const hasJeenyQuery = queries.some((query) => query.package?.some((entry) => entry.$["android:name"] === "me.com.easytaxista"));
+    if (!hasJeenyQuery) {
+      const queryBlock = queries[0] ?? {};
+      queryBlock.package ??= [];
+      queryBlock.package.push({ $: { "android:name": "me.com.easytaxista" } });
+      if (!queries.length) queries.push(queryBlock);
+    }
     const app = AndroidConfig.Manifest.getMainApplicationOrThrow(mod.modResults);
     app.service ??= [];
     const existing = app.service.find((service) => service.$?.["android:name"] === SERVICE_NAME);
@@ -27,7 +36,7 @@ const withHiAcceptorAccessibility: ConfigPlugin = (config) => {
   return withDangerousMod(config, ["android", async (mod) => {
     const resDir = path.join(mod.modRequest.platformProjectRoot, "app/src/main/res/xml");
     fs.mkdirSync(resDir, { recursive: true });
-    fs.writeFileSync(path.join(resDir, "hi_acceptor_accessibility_service.xml"), `<?xml version="1.0" encoding="utf-8"?>\n<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged" android:accessibilityFeedbackType="feedbackGeneric" android:notificationTimeout="100" android:canRetrieveWindowContent="true" android:canPerformGestures="true" android:description="Reads visible ride request details in the driver app you selected, applies your rules, declines clearly resolved destinations inside excluded circles, and may accept only when all required details are clear." android:packageNames="me.com.easytaxista,ee.mtakso.driver" />\n`);
+    fs.writeFileSync(path.join(resDir, "hi_acceptor_accessibility_service.xml"), `<?xml version="1.0" encoding="utf-8"?>\n<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged|typeViewClicked|typeViewScrolled|typeViewTextChanged|typeViewFocused" android:accessibilityFeedbackType="feedbackGeneric" android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds" android:notificationTimeout="200" android:canRetrieveWindowContent="true" android:canPerformGestures="true" android:packageNames="me.com.easytaxista" />\n`);
     return mod;
   }]);
 };

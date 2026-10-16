@@ -1,8 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { AreaCircle, RideSettings } from "@/lib/ride-rules";
 
-export type TargetApp = "jeeny" | "bolt";
-export type StoredSettings = RideSettings & { targetApp: TargetApp; region: "SA" | "JO" };
+export type TargetApp = "jeeny";
+export type StoredSettings = RideSettings & { targetApp: TargetApp; region: "SA" };
 export type ActivityItem = { id: string; at: string; accepted: boolean; reason: string; fare?: number; destination?: string };
 
 export const MAX_EXCLUDED_AREAS = 5;
@@ -24,6 +24,9 @@ const ENABLED_KEY = "hiaccept.enabled.v1";
 function normalizeAreas(settings: StoredSettings): StoredSettings {
   return {
     ...settings,
+    targetApp: "jeeny",
+    region: "SA",
+    currency: "SAR",
     excludedAreas: Array.isArray(settings.excludedAreas) ? settings.excludedAreas.slice(0, MAX_EXCLUDED_AREAS) : [],
     preferredArea: settings.preferredArea ?? null,
   };

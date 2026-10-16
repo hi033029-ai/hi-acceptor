@@ -31,10 +31,22 @@ class HiAcceptorModule : Module() {
       HiAcceptorAccessibilityService.instance?.refreshConfiguration()
     }
 
-    AsyncFunction("saveSettings") { settings: Map<String, Any> ->
-      val json = JSONObject(settings)
-      appContext.reactContext!!.getSharedPreferences(HiAcceptorAccessibilityService.PREFS, Context.MODE_PRIVATE)
-        .edit().putString("settings", json.toString()).apply()
+    AsyncFunction("launchJeeny") {
+      val context = appContext.reactContext!!
+      val launchIntent = context.packageManager.getLaunchIntentForPackage("me.com.easytaxista")
+        ?: throw IllegalStateException("Jeeny Driver package me.com.easytaxista was not visible to HI Acceptor; reinstall the latest APK and make sure Jeeny Driver is installed")
+      launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      runCatching { context.startActivity(launchIntent) }
+        .getOrElse { throw IllegalStateException("Jeeny Driver was found but could not be launched", it) }
+      HiAcceptorAccessibilityService.instance?.scheduleOnlineTap()
+    }
+
+    AsyncFunction("saveSettings") { settingsJson: String ->
+      val json = runCatching { JSONObject(settingsJson) }
+        .getOrElse { throw IllegalArgumentException("Invalid HI Acceptor settings JSON") }
+      val written = appContext.reactContext!!.getSharedPreferences(HiAcceptorAccessibilityService.PREFS, Context.MODE_PRIVATE)
+        .edit().putString("settings", json.toString()).commit()
+      if (!written) throw IllegalStateException("Android did not commit HI Acceptor settings")
       HiAcceptorAccessibilityService.instance?.refreshConfiguration()
     }
 

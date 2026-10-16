@@ -27,7 +27,6 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   companion object {
     const val PREFS = "hiaccept.local"
     private const val JEENY = "me.com.easytaxista"
-    private const val BOLT = "ee.mtakso.driver"
     @Volatile var instance: HiAcceptorAccessibilityService? = null
   }
 
@@ -37,6 +36,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private var lastFingerprint = ""
   private var pendingFingerprint = ""
   private var lastTapAt = 0L
+  private var lastOnlineAttemptAt = 0L
   private var lastGeocodeAt = 0L
   private var settings = JSONObject()
   private val geocoderExecutor = Executors.newSingleThreadExecutor()
@@ -57,24 +57,39 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     settings = runCatching { JSONObject(prefs.getString("settings", "{}") ?: "{}") }.getOrDefault(JSONObject())
   }
 
+  fun scheduleOnlineTap() {
+    mainHandler.postDelayed({
+      if (getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("operationEnabled", false)) {
+        rootInActiveWindow?.let { ensureOnline(it) }
+      }
+    }, 1500)
+  }
+
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
     if (event == null || event.packageName == null) return
     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
     if (!prefs.getBoolean("operationEnabled", false)) return
     refreshConfiguration()
 
-    val target = settings.optString("targetPackage", JEENY)
-    if (target != JEENY && target != BOLT) return
+    val target = JEENY
     if (event.packageName.toString() != target) return
-    if (event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+    if (event.eventType !in listOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, AccessibilityEvent.TYPE_WINDOWS_CHANGED, AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_SCROLLED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED, AccessibilityEvent.TYPE_VIEW_FOCUSED)) return
 
     val root = rootInActiveWindow ?: return
+    if (ensureOnline(root)) return
     val allText = collectText(root).joinToString(" | ").take(5000)
     if (allText.isBlank()) return
-    val parsed = evaluate(allText)
+    if (!isJeenyOfferCard(allText)) return
+    val candidate = parseDetails(allText)
+    val parsed = candidate?.takeIf(::matchesRules)
     val excluded = readCircles("excludedAreas")
     val preferred = readCircle(settings.optJSONObject("preferredArea"))
     val destinationQuery = parsed?.destination ?: extractDestination(allText)
+    if (candidate != null && parsed == null) {
+      val fingerprint = (target + "|" + allText.hashCode()).take(160)
+      rejectOrSkip(target, fingerprint, "Ride does not meet your saved fare, pickup-time, currency, or destination rules")
+      return
+    }
     if (parsed == null && excluded.isEmpty()) {
       val reason = evaluateReason(allText)
       if (reason.isNotBlank()) prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
@@ -85,13 +100,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (fingerprint == lastFingerprint || fingerprint == pendingFingerprint || now - lastTapAt < 2500) return
 
     if (excluded.isEmpty() && preferred == null) {
-      completeDecision(target, fingerprint, allText, null)
+      completeDecision(target, fingerprint, allText, emptyList())
       return
     }
 
     if (!Geocoder.isPresent()) {
       if (excluded.isNotEmpty()) prefs.edit().putString("lastEvent", "Skipped: Android location lookup is unavailable; excluded-area check could not be verified").apply()
-      else completeDecision(target, fingerprint, allText, null)
+      else completeDecision(target, fingerprint, allText, emptyList())
       return
     }
     if (destinationQuery.isNullOrBlank()) {
@@ -102,63 +117,101 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     lastGeocodeAt = now
     pendingFingerprint = fingerprint
     geocoderExecutor.execute {
-      val location = runCatching {
+      val locations = runCatching {
         @Suppress("DEPRECATION")
-        Geocoder(this, Locale.getDefault()).getFromLocationName(destinationQuery, 2)?.takeIf { it.size == 1 }?.firstOrNull()
-      }.getOrNull()
+        Geocoder(this, Locale.getDefault()).getFromLocationName(destinationQuery, 5).orEmpty().map { it.latitude to it.longitude }
+      }.getOrDefault(emptyList())
       mainHandler.post {
         if (pendingFingerprint == fingerprint) pendingFingerprint = ""
-        if (location == null) {
+        if (locations.isEmpty()) {
           if (excluded.isNotEmpty()) {
             lastFingerprint = fingerprint
             prefs.edit().putString("lastEvent", "Skipped: destination location was not uniquely resolved; excluded-area check could not be verified").apply()
           }
-          else completeDecision(target, fingerprint, allText, null)
+          else completeDecision(target, fingerprint, allText, emptyList())
           return@post
         }
-        completeDecision(target, fingerprint, allText, location.latitude to location.longitude)
+        completeDecision(target, fingerprint, allText, locations)
       }
     }
   }
 
-  private fun completeDecision(target: String, fingerprint: String, originalText: String, point: Pair<Double, Double>?) {
+  private fun rejectOrSkip(target: String, fingerprint: String, reason: String) {
+    val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+    val root = rootInActiveWindow
+    val rejectNode = root?.let(::findRejectNode)
+    if (rejectNode != null) {
+      val rejected = if (rejectNode.isClickable) rejectNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(rejectNode)
+      if (rejected) {
+        lastFingerprint = fingerprint
+        lastTapAt = SystemClock.elapsedRealtime()
+        prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+        return
+      }
+    }
+    lastFingerprint = fingerprint
+    prefs.edit().putString("lastEvent", "Skipped: $reason; no clear decline control was available").apply()
+  }
+
+  private fun ensureOnline(root: AccessibilityNodeInfo): Boolean {
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastOnlineAttemptAt < 5000) return false
+    val onlineNode = findGoOnlineNode(root) ?: return false
+    val clicked = if (onlineNode.isClickable) onlineNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(onlineNode)
+    if (clicked) {
+      lastOnlineAttemptAt = now
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Jeeny online mode started").apply()
+      return true
+    }
+    return false
+  }
+
+  private fun completeDecision(target: String, fingerprint: String, originalText: String, points: List<Pair<Double, Double>>) {
     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
     if (!prefs.getBoolean("operationEnabled", false)) return
     refreshConfiguration()
-    val currentTarget = settings.optString("targetPackage", JEENY)
+    val currentTarget = JEENY
     if (currentTarget != target) return
     val root = rootInActiveWindow ?: return
     if (root.packageName?.toString() != target) return
     val currentText = collectText(root).joinToString(" | ").take(5000)
-    if ((target + "|" + currentText.hashCode()).take(160) != fingerprint) return
+    val currentFingerprint = (target + "|" + currentText.hashCode()).take(160)
     val excluded = readCircles("excludedAreas")
     val preferred = readCircle(settings.optJSONObject("preferredArea"))
-    val excludedMatch = if (excluded.isNotEmpty() && point != null) excluded.firstOrNull { insideCircle(point.first, point.second, it) } else null
+    val destinationText = extractDestination(currentText).orEmpty()
+    val excludedMatch = excluded.firstOrNull { area ->
+      val label = area.label.trim().lowercase(Locale.ROOT)
+      val text = destinationText.lowercase(Locale.ROOT)
+      (label.length >= 3 && (text.contains(label) || label.contains(text))) || points.any { insideCircle(it.first, it.second, area) }
+    }
     if (excludedMatch != null) {
-      val rejectNode = findRejectNode(root)
+      val rejectNode = findRejectNode(root, allowTopRightIcon = true)
       if (rejectNode == null) {
         prefs.edit().putString("lastEvent", "Skipped: ride is in excluded area '${excludedMatch.label}', but no explicit decline control was found").apply()
-        lastFingerprint = fingerprint
+        lastFingerprint = currentFingerprint
+        scheduleDeclineRetry(excludedMatch.label, currentFingerprint, 400L)
+        scheduleDeclineRetry(excludedMatch.label, currentFingerprint, 1000L)
         return
       }
       val declined = if (rejectNode.isClickable) rejectNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(rejectNode)
       if (declined) {
-        lastFingerprint = fingerprint
+        lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
       } else prefs.edit().putString("lastEvent", "Skipped: excluded-area decline control could not be activated").apply()
       return
     }
-    if (excluded.isNotEmpty() && point == null) {
+    if (excluded.isNotEmpty() && points.isEmpty()) {
       prefs.edit().putString("lastEvent", "Skipped: excluded-area location was not verified").apply()
       return
     }
 
-    if (evaluate(currentText) == null) {
+    if (parseDetails(currentText)?.let(::matchesRules) == null) {
       prefs.edit().putString("lastEvent", "Skipped: request does not meet your fare, currency, or pickup rules").apply()
       return
     }
 
+    val point = points.firstOrNull()
     val isPreferred = point != null && preferred != null && insideCircle(point.first, point.second, preferred)
     val button = findAcceptNode(root) ?: run {
       prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
@@ -166,32 +219,60 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     }
     val clicked = if (button.isClickable) button.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(button)
     if (clicked) {
-      lastFingerprint = fingerprint
+      lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", if (isPreferred) "Accepted a matching request inside preferred area '${preferred?.label}'" else "Accepted a request matching all configured rules").apply()
       notifyAccepted()
     } else prefs.edit().putString("lastEvent", "Skipped: accept control could not be activated").apply()
   }
 
-  private fun evaluate(text: String): Parsed? {
-    val fareRegex = Regex("(?:fare|price|earnings|السعر|قيمة الرحلة)\\s*[:：]?\\s*(?:(SAR|SR|ر\\.س|JOD|د\\.أ)\\s*)?(\\d+(?:[.,]\\d{1,2})?)\\s*(?:(SAR|SR|ر\\.س|JOD|د\\.أ))?", RegexOption.IGNORE_CASE)
+  private fun scheduleDeclineRetry(label: String, fingerprint: String, delayMs: Long) {
+    mainHandler.postDelayed({
+      val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+      if (!prefs.getBoolean("operationEnabled", false)) return@postDelayed
+      val root = rootInActiveWindow ?: return@postDelayed
+      if (root.packageName?.toString() != JEENY) return@postDelayed
+      val node = findRejectNode(root, allowTopRightIcon = true) ?: return@postDelayed
+      val clicked = if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(node)
+      if (clicked) {
+        lastFingerprint = fingerprint
+        lastTapAt = SystemClock.elapsedRealtime()
+        prefs.edit().putString("lastEvent", "Declined a request inside excluded area '$label'").apply()
+      }
+    }, delayMs)
+  }
+
+  private fun parseDetails(text: String): Parsed? {
+    val fareRegex = Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)[^0-9﷼]{0,24}(?:﷼|SAR|SR|ر\\.س)?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.س)?", RegexOption.IGNORE_CASE)
     val pickupRegex = Regex("(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)\\D{0,20}(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)", RegexOption.IGNORE_CASE)
     val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
     val fare = fareRegex.find(text) ?: return null
     val pickup = pickupRegex.find(text) ?: return null
     val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotBlank) ?: return null
-    val currencyToken = fare.groupValues[1].ifBlank { fare.groupValues[3] }
+    val currencyToken = when {
+      fare.groupValues[2].isNotBlank() -> fare.groupValues[2]
+      fare.value.contains("﷼") || fare.value.contains("SAR", true) || fare.value.contains("SR", true) || fare.value.contains("ر.س") -> "SAR"
+      else -> ""
+    }
     if (currencyToken.isBlank()) return null
-    val amount = fare.groupValues[2].replace(',', '.').toDoubleOrNull() ?: return null
+    val amount = fare.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
     val eta = pickup.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-    val currency = normalizeCurrency(currencyToken)
+    return Parsed(amount, normalizeCurrency(currencyToken), eta, destination)
+  }
+
+  private fun isJeenyOfferCard(text: String): Boolean {
+    val normalized = text.lowercase(Locale.ROOT)
+    return normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("accept offer") || normalized.contains("﷼")
+  }
+
+  private fun matchesRules(parsed: Parsed): Boolean {
+    val currency = parsed.currency
     val expectedCurrency = settings.optString("currency", "SAR").uppercase(Locale.ROOT)
-    if (currency != expectedCurrency) return null
+    if (currency != expectedCurrency) return false
     val min = settings.optDouble("minFare", Double.NaN)
     val max = settings.optDouble("maxFare", Double.NaN)
     val maxPickup = settings.optDouble("maxPickupMinutes", 5.0)
-    if (!min.isFinite() || !max.isFinite() || max <= min || amount < min || amount > max || eta > maxPickup) return null
-    return Parsed(amount, currency, eta, destination)
+    return min.isFinite() && max.isFinite() && max > min && parsed.fare >= min && parsed.fare <= max && parsed.pickupMinutes <= maxPickup
   }
 
   private fun evaluateReason(text: String): String {
@@ -199,6 +280,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (!Regex("(?:fare|price|earnings|السعر|قيمة الرحلة)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "fare not clearly identified"
     if (!Regex("(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "pickup time not clearly identified"
     return "request details are unclear or do not meet your fare, currency, or pickup rules"
+  }
+
+  private fun extractDestination(text: String): String? {
+    val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
+    return destinationRegex.find(text)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotBlank)
   }
 
   private fun notifyAccepted() {
@@ -237,8 +323,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   }
 
   private fun normalizeCurrency(value: String): String = when (value.uppercase(Locale.ROOT)) {
-    "SR", "ر.س" -> "SAR"
-    "د.أ" -> "JOD"
+    "SR", "ر.س", "﷼" -> "SAR"
     else -> value.uppercase(Locale.ROOT)
   }
 
@@ -248,9 +333,20 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     return own + children
   }
 
+  private fun findGoOnlineNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    val label = sequenceOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
+    val goOnline = listOf("go online", "start accepting", "start accepting rides", "start work", "بدء العمل", "بدء استقبال الرحلات", "تشغيل").any(label::contains)
+    if (goOnline && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
+    for (index in 0 until node.childCount) {
+      val child = node.getChild(index) ?: continue
+      findGoOnlineNode(child)?.let { return it }
+    }
+    return null
+  }
+
   private fun findAcceptNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
     val label = sequenceOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
-    val explicitAccept = listOf("accept", "accept ride", "take ride", "قبول", "اقبل").any(label::contains)
+    val explicitAccept = listOf("accept", "accept ride", "accept now", "take ride", "قبول", "قبول الطلب", "اقبل").any(label::contains)
     if (explicitAccept && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
     for (index in 0 until node.childCount) {
       val child = node.getChild(index) ?: continue
@@ -259,13 +355,18 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     return null
   }
 
-  private fun findRejectNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+  private fun findRejectNode(node: AccessibilityNodeInfo, allowTopRightIcon: Boolean = false): AccessibilityNodeInfo? {
     val label = sequenceOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
-    val explicitDecline = listOf("decline", "reject", "skip ride", "not interested", "رفض", "تخطي الرحلة").any(label::contains)
-    if (explicitDecline && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
+    val resourceId = node.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
+    val explicitDecline = listOf("decline", "decline ride", "reject", "reject ride", "skip", "skip ride", "ignore", "not interested", "dismiss", "cancel request", "no thanks", "رفض", "رفض الطلب", "تخطي", "تخطي الرحلة", "تجاهل", "إغلاق").any(label::contains)
+    val declineResource = listOf("decline", "reject", "skip", "cancel", "dismiss", "close").any(resourceId::contains)
+    val iconClass = node.className?.toString()?.lowercase(Locale.ROOT).orEmpty().let { it.contains("imagebutton") || it.contains("imageview") }
+    val bounds = Rect().also { node.getBoundsInScreen(it) }
+    val topRightRideIcon = allowTopRightIcon && iconClass && node.isEnabled && node.isClickable && bounds.top < resources.displayMetrics.heightPixels * 0.60f && bounds.left > resources.displayMetrics.widthPixels * 0.55f
+    if ((explicitDecline || declineResource || topRightRideIcon) && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
     for (index in 0 until node.childCount) {
       val child = node.getChild(index) ?: continue
-      findRejectNode(child)?.let { return it }
+      findRejectNode(child, allowTopRightIcon)?.let { return it }
     }
     return null
   }

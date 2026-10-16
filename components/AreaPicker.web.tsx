@@ -1,7 +1,7 @@
 import { Text, TextInput, View } from "react-native";
 import type { AreaCircle } from "@/lib/ride-rules";
 
-type Props = { area?: AreaCircle | null; region: "SA" | "JO"; onChange: (point: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">) => void };
+type Props = { area?: AreaCircle | null; region: "SA" | "JO"; mapsApiKey?: string; onChange: (point: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">) => void };
 export function AreaPicker({ area, region, onChange }: Props) {
   const fallback = region === "SA" ? { latitude: 24.7136, longitude: 46.6753 } : { latitude: 31.9539, longitude: 35.9106 };
   const value = area ?? { ...fallback, radiusMeters: 1000 };

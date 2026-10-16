@@ -40,11 +40,11 @@ const number = String.raw`(\d+(?:[.,]\d{1,2})?)`;
 
 export function parseRideRequest(input: string): RideRequest {
   const text = input.replace(/\s+/g, " ").trim();
-  const fareMatch = text.match(new RegExp(`(?:fare|price|earnings|\u0642\u064a\u0645\u0629\u0020\u0627\u0644\u0631\u062d\u0644\u0629|\u0627\u0644\u0633\u0639\u0631)\\s*[:：]?\\s*(?:(SAR|SR|ر.س|JOD|د.أ)\\s*)?${number}\\s*(?:(SAR|SR|ر.س|JOD|د.أ))?`, "i"));
+  const fareMatch = text.match(new RegExp(`(?:fare|price|earnings|\u0642\u064a\u0645\u0629\u0020\u0627\u0644\u0631\u062d\u0644\u0629|\u0627\u0644\u0633\u0639\u0631)\\s*[:：]?\\s*(?:(SAR|SR|ر.س)\\s*)?${number}\\s*(?:(SAR|SR|ر.س))?`, "i"));
   const pickupMatch = text.match(new RegExp(`(?:pickup|pick-up|arrival|arrive|to\u0020pickup|\u0648\u0642\u062a\u0020\u0627\u0644\u0648\u0635\u0648\u0644|\u0648\u0642\u062a\u0020\u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645)\\D{0,20}${number}\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)`, "i"));
   const currencyToken = fareMatch?.[1] ?? fareMatch?.[3];
   const destinationMatch = text.match(/(?:destination|drop-?off|to|الوجهة|الى|إلى)\s*[:：]?\s*([^,;|]{2,80})/i);
-  const currency = currencyToken?.toUpperCase() === "SR" || currencyToken === "ر.س" ? "SAR" : currencyToken === "د.أ" ? "JOD" : currencyToken?.toUpperCase();
+  const currency = currencyToken?.toUpperCase() === "SR" || currencyToken === "ر.س" ? "SAR" : currencyToken?.toUpperCase();
   return {
     text,
     fare: fareMatch?.[2] ? Number(fareMatch[2].replace(",", ".")) : undefined,
