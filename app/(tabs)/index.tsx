@@ -19,6 +19,24 @@ const red = "#B34842";
 const supported = { jeeny: "me.com.easytaxista" } as const;
 const mapsApiKey = String(Constants.expoConfig?.extra?.googleMapsApiKey ?? "");
 
+async function collectAreaNames(latitude: number, longitude: number, radiusMeters: number) {
+  const offsets = [[0, 0], [0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]];
+  const results = await Promise.all(offsets.map(async ([north, east]) => {
+    const lat = latitude + (radiusMeters * north) / 111_320;
+    const lng = longitude + (radiusMeters * east) / (111_320 * Math.max(0.2, Math.cos(latitude * Math.PI / 180)));
+    return Location.reverseGeocodeAsync({ latitude: lat, longitude: lng }).catch(() => []);
+  }));
+  const names = new Set<string>();
+  for (const places of results) {
+    for (const place of places) {
+      for (const value of [place.name, place.street, place.district, place.subregion, place.city, place.region]) {
+        if (value?.trim()) names.add(value.trim());
+      }
+    }
+  }
+  return [...names].slice(0, 40);
+}
+
 type PermissionState = { accessibility: boolean; foreground: boolean; background: boolean };
 
 type EditingArea = { existing?: AreaCircle; draft: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">; label: string };
@@ -184,6 +202,7 @@ export default function HomeScreen() {
       return;
     }
     const created = createArea(latitude, longitude, radiusMeters, editingArea.label || `Excluded area ${settings.excludedAreas.length + 1}`);
+    created.names = await collectAreaNames(latitude, longitude, radiusMeters);
     const nextSettings = { ...settings, excludedAreas: [...settings.excludedAreas, created].slice(0, MAX_EXCLUDED_AREAS) };
     await persistSettings(nextSettings);
     setEditingArea(null);

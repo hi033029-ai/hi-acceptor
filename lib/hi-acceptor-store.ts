@@ -46,7 +46,7 @@ export async function saveSettings(settings: StoredSettings) {
 }
 
 export function createArea(latitude: number, longitude: number, radiusMeters: number, label: string): AreaCircle {
-  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: label.trim() || "Area", latitude, longitude, radiusMeters };
+  return { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, label: label.trim() || "Area", latitude, longitude, radiusMeters, names: [] };
 }
 
 export async function loadActivity(): Promise<ActivityItem[]> {

@@ -31,7 +31,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   }
 
   private data class Parsed(val fare: Double, val currency: String, val pickupMinutes: Double, val destination: String)
-  private data class Circle(val id: String, val label: String, val latitude: Double, val longitude: Double, val radiusMeters: Double)
+  private data class Circle(val id: String, val label: String, val latitude: Double, val longitude: Double, val radiusMeters: Double, val names: List<String>)
 
   private var lastFingerprint = ""
   private var pendingFingerprint = ""
@@ -328,8 +328,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     )
     val keys = aliases.filter { (alias, _) -> normalized.contains(normalizeDestination(alias)) }.values.toSet()
     return areas.filter { area ->
-      val label = normalizeDestination(area.label)
-      label.length >= 3 && (normalized.contains(label) || keys.any { key -> label.contains(key) || key.contains(label) })
+      val names = listOf(area.label) + area.names
+      names.any { name ->
+        val label = normalizeDestination(name)
+        label.length >= 3 && (normalized.contains(label) || keys.any { key -> label.contains(key) || key.contains(label) })
+      }
     }.map { it.latitude to it.longitude }
   }
 
@@ -361,7 +364,8 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val lng = value.optDouble("longitude", Double.NaN)
     val radius = value.optDouble("radiusMeters", Double.NaN)
     if (!lat.isFinite() || lat !in -90.0..90.0 || !lng.isFinite() || lng !in -180.0..180.0 || !radius.isFinite() || radius !in 250.0..10000.0) return null
-    return Circle(value.optString("id"), value.optString("label", "Area"), lat, lng, radius)
+    val names = value.optJSONArray("names")?.let { array -> (0 until minOf(array.length(), 40)).mapNotNull { array.optString(it).takeIf(String::isNotBlank) } } ?: emptyList()
+    return Circle(value.optString("id"), value.optString("label", "Area"), lat, lng, radius, names)
   }
 
   private fun insideCircle(latitude: Double, longitude: Double, circle: Circle): Boolean = distanceMeters(latitude, longitude, circle.latitude, circle.longitude) <= circle.radiusMeters

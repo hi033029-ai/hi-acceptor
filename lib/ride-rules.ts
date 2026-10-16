@@ -4,6 +4,7 @@ export type AreaCircle = {
   latitude: number;
   longitude: number;
   radiusMeters: number;
+  names?: string[];
 };
 
 export type RideSettings = {
