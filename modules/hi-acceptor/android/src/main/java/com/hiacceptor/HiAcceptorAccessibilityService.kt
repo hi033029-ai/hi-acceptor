@@ -180,10 +180,9 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val excluded = readCircles("excludedAreas")
     val preferred = readCircle(settings.optJSONObject("preferredArea"))
     val destinationText = extractDestination(currentText).orEmpty()
+    val keywordPoints = smartDestinationPoints(destinationText, excluded)
     val excludedMatch = excluded.firstOrNull { area ->
-      val label = area.label.trim().lowercase(Locale.ROOT)
-      val text = destinationText.lowercase(Locale.ROOT)
-      (label.length >= 3 && (text.contains(label) || label.contains(text))) || points.any { insideCircle(it.first, it.second, area) }
+      points.any { insideCircle(it.first, it.second, area) } || keywordPoints.any { insideCircle(it.first, it.second, area) }
     }
     if (excludedMatch != null) {
       val rejectNode = findRejectNode(root, allowTopRightIcon = true)
@@ -312,6 +311,33 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
     return destinationRegex.find(text)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotBlank)
   }
+
+  /**
+   * Maps common Arabic/English spellings to the center of a saved exclusion
+   * circle. The circle center is the user's selected coordinate, so no
+   * unverified third-party neighborhood coordinate is hard-coded here.
+   */
+  private fun smartDestinationPoints(destination: String, areas: List<Circle>): List<Pair<Double, Double>> {
+    val normalized = normalizeDestination(destination)
+    if (normalized.isBlank()) return emptyList()
+    val aliases = mapOf(
+      "الحجون" to "hujun", "al hujun" to "hujun", "al-hujun" to "hujun",
+      "الحجون مكة" to "hujun", "hujun" to "hujun",
+      "الخالدية" to "khalidiyah", "al khalidiyah" to "khalidiyah", "al-khalidiyah" to "khalidiyah",
+      "الخالديه" to "khalidiyah", "khalidiyah" to "khalidiyah"
+    )
+    val keys = aliases.filter { (alias, _) -> normalized.contains(normalizeDestination(alias)) }.values.toSet()
+    return areas.filter { area ->
+      val label = normalizeDestination(area.label)
+      label.length >= 3 && (normalized.contains(label) || keys.any { key -> label.contains(key) || key.contains(label) })
+    }.map { it.latitude to it.longitude }
+  }
+
+  private fun normalizeDestination(value: String): String = value.lowercase(Locale.ROOT)
+    .replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
+    .replace('ة', 'ه').replace('ى', 'ي')
+    .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+    .trim()
 
   private fun notifyAccepted() {
     if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
