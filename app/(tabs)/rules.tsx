@@ -29,7 +29,7 @@ export default function RulesScreen() {
     }
     if (!editing) return;
     const created = createArea(draft.latitude, draft.longitude, draft.radiusMeters, zoneLabel);
-    const area = { ...created, id: editing.existing?.id ?? created.id };
+    const area = { ...created, id: editing.existing?.id ?? created.id, names: editing.existing?.names ?? created.names };
     if (editing.kind === "excluded") {
       const next = editing.existing ? settings.excludedAreas.map((item) => item.id === editing.existing?.id ? area : item) : [...settings.excludedAreas, area];
       update("excludedAreas", next.slice(0, MAX_EXCLUDED_AREAS));

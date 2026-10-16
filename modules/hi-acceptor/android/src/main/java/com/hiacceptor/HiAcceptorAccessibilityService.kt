@@ -84,9 +84,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
     val target = JEENY
     if (event.packageName.toString() != target) return
-    val root = rootInActiveWindow ?: return
-    if (ensureOnline(root)) return
-    val allText = collectText(root).joinToString(" | ").take(5000)
+    val roots = activeJeenyRoots()
+    if (roots.isEmpty()) return
+    val primaryRoot = roots.firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: roots.first()
+    if (ensureOnline(primaryRoot)) return
+    val allText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
     if (allText.isBlank()) return
     if (!isJeenyOfferCard(allText)) return
     showStatusToast("Scanning ride…", 1200L)
@@ -192,7 +194,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     refreshConfiguration()
     val currentTarget = JEENY
     if (currentTarget != target) return
-    val root = rootInActiveWindow ?: return
+    val root = activeJeenyRoots().firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: return
     if (root.packageName?.toString() != target) return
     val currentText = collectText(root).joinToString(" | ").take(5000)
     val currentFingerprint = (target + "|" + currentText.hashCode()).take(160)
@@ -326,11 +328,11 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
   private fun parseDetails(text: String): Parsed? {
     val fareRegex = Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)[^0-9﷼]{0,36}(?:﷼|SAR|SR|ر\\.س)?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.س)?", RegexOption.IGNORE_CASE)
-    val pickupRegex = Regex("(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)\\D{0,20}(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)", RegexOption.IGNORE_CASE)
+    val pickupRegex = Regex("(?:(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)\\D{0,20}(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)|(?:^|[|])\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes)\\s*(?:away)?)", RegexOption.IGNORE_CASE)
     val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
     val fare = fareRegex.find(text) ?: return null
     val pickup = pickupRegex.find(text) ?: return null
-    val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotBlank) ?: return null
+    val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim().orEmpty()
     val currencyToken = when {
       fare.groupValues[2].isNotBlank() -> fare.groupValues[2]
       fare.value.contains("﷼") || fare.value.contains("SAR", true) || fare.value.contains("SR", true) || fare.value.contains("ر.س") || fare.value.contains("you'll", true) || fare.value.contains("you’ll", true) -> "SAR"
@@ -338,13 +340,14 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     }
     if (currencyToken.isBlank()) return null
     val amount = fare.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-    val eta = pickup.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
+    val etaText = pickup.groupValues.drop(1).firstOrNull(String::isNotBlank) ?: return null
+    val eta = etaText.replace(',', '.').toDoubleOrNull() ?: return null
     return Parsed(amount, normalizeCurrency(currencyToken), eta, destination)
   }
 
   private fun isJeenyOfferCard(text: String): Boolean {
     val normalized = text.lowercase(Locale.ROOT)
-    return normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("accept offer") || normalized.contains("﷼")
+    return normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("net earning") || normalized.contains("accept offer") || normalized.contains("قبول العرض") || normalized.contains("mins away") || normalized.contains("﷼")
   }
 
   private fun matchesRules(parsed: Parsed): Boolean {
@@ -444,6 +447,18 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val own = sequenceOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull().filter(String::isNotBlank).toList()
     val children = (0 until node.childCount).flatMap { index -> node.getChild(index)?.let(::collectText) ?: emptyList() }
     return own + children
+  }
+
+  private fun activeJeenyRoots(): List<AccessibilityNodeInfo> {
+    val roots = mutableListOf<AccessibilityNodeInfo>()
+    rootInActiveWindow?.let { roots.add(it) }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      windows.orEmpty().forEach { window ->
+        val root = window.root ?: return@forEach
+        if (root.packageName?.toString() == JEENY && roots.none { it === root }) roots.add(root)
+      }
+    }
+    return roots.filter { it.packageName?.toString() == JEENY }
   }
 
   private fun findGoOnlineNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
