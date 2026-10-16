@@ -36,7 +36,7 @@ const withHiAcceptorAccessibility: ConfigPlugin = (config) => {
   return withDangerousMod(config, ["android", async (mod) => {
     const resDir = path.join(mod.modRequest.platformProjectRoot, "app/src/main/res/xml");
     fs.mkdirSync(resDir, { recursive: true });
-    fs.writeFileSync(path.join(resDir, "hi_acceptor_accessibility_service.xml"), `<?xml version="1.0" encoding="utf-8"?>\n<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged|typeViewClicked|typeViewScrolled|typeViewTextChanged|typeViewFocused" android:accessibilityFeedbackType="feedbackGeneric" android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds" android:notificationTimeout="200" android:canRetrieveWindowContent="true" android:canPerformGestures="true" android:packageNames="me.com.easytaxista" />\n`);
+    fs.writeFileSync(path.join(resDir, "hi_acceptor_accessibility_service.xml"), `<?xml version="1.0" encoding="utf-8"?>\n<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeAllMask" android:accessibilityFeedbackType="feedbackGeneric" android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows" android:canPerformGestures="true" android:canRetrieveWindowContent="true" android:notificationTimeout="150" android:packageNames="me.com.easytaxista" />\n`);
     return mod;
   }]);
 };

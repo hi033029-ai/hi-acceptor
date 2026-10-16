@@ -47,13 +47,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     super.onServiceConnected()
     instance = this
     serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
-      eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-        AccessibilityEvent.TYPE_WINDOWS_CHANGED or
-        AccessibilityEvent.TYPE_VIEW_CLICKED or
-        AccessibilityEvent.TYPE_VIEW_SCROLLED or
-        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
-        AccessibilityEvent.TYPE_VIEW_FOCUSED
+      eventTypes = AccessibilityEvent.TYPES_ALL_MASK
       feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
       flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
       notificationTimeout = 200
@@ -87,8 +81,6 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
     val target = JEENY
     if (event.packageName.toString() != target) return
-    if (event.eventType !in listOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, AccessibilityEvent.TYPE_WINDOWS_CHANGED, AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_SCROLLED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED, AccessibilityEvent.TYPE_VIEW_FOCUSED)) return
-
     val root = rootInActiveWindow ?: return
     if (ensureOnline(root)) return
     val allText = collectText(root).joinToString(" | ").take(5000)
