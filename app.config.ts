@@ -18,13 +18,13 @@ const publicRuntime = {
 };
 
 const config: ExpoConfig = {
-  name: env.appName, slug: env.appSlug, version: "1.0.0", extra: publicRuntime,
+  name: env.appName, slug: env.appSlug, version: "1.0.1", extra: publicRuntime,
   orientation: "portrait", icon: "./assets/images/icon.png", scheme: env.scheme,
   userInterfaceStyle: "automatic",
   ios: { supportsTablet: true, bundleIdentifier: env.bundleId, infoPlist: { ITSAppUsesNonExemptEncryption: false } },
   android: {
     adaptiveIcon: { backgroundColor: "#102532", foregroundImage: "./assets/images/android-icon-foreground.png", backgroundImage: "./assets/images/android-icon-background.png", monochromeImage: "./assets/images/android-icon-monochrome.png" },
-    predictiveBackGestureEnabled: false, package: env.bundleId, permissions: ["POST_NOTIFICATIONS", "ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION"],
+    predictiveBackGestureEnabled: false, package: env.bundleId, versionCode: 2, permissions: ["POST_NOTIFICATIONS", "ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "ACCESS_BACKGROUND_LOCATION"],
     intentFilters: [{ action: "VIEW", autoVerify: true, data: [{ scheme: env.scheme, host: "*" }], category: ["BROWSABLE", "DEFAULT"] }],
   },
   web: { bundler: "metro", output: "static", favicon: "./assets/images/favicon.png" },
