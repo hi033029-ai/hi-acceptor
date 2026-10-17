@@ -87,6 +87,15 @@ export default function HomeScreen() {
     return () => subscription.remove();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!hasNativeAcceptor) return;
+    const id = setInterval(async () => {
+      const status = await getNativeStatus().catch(() => null);
+      if (status) setServiceStatus(`${status.lastEvent ?? "No request processed yet"}\n${status.lastSeen ?? ""}`);
+    }, 2000);
+    return () => clearInterval(id);
+  }, []);
+
   const continueWithLanguage = async () => {
     await saveLanguage(languageDraft);
     setLanguage(languageDraft);
@@ -230,7 +239,7 @@ export default function HomeScreen() {
 
       <View style={{ backgroundColor: ink, borderRadius: 22, padding: 19, marginBottom: 12 }}>
         <View style={rowBetween}><View><Text style={{ color: "#A8C4C4", fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>{text.automation}</Text><Text style={{ color: "white", fontSize: 24, fontWeight: "800", marginTop: 5 }}>{enabled ? text.running : text.stopped}</Text></View><Pressable onPress={() => void toggleAutomation()} style={{ backgroundColor: enabled ? red : teal, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 18 }}><Text style={{ color: "white", fontWeight: "900" }}>{enabled ? text.stop : text.start}</Text></Pressable></View>
-        <Text style={{ color: "#C9DDDB", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
+        <Text numberOfLines={6} style={{ color: "#C9DDDB", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
       </View>
 
       <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>

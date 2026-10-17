@@ -6,6 +6,7 @@ import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Path
 import android.graphics.Rect
@@ -41,6 +42,20 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private var lastOnlineAttemptAt = 0L
   private var lastGeocodeAt = 0L
   private var lastToastAt = 0L
+  private var lastSeenWriteAt = 0L
+  private var eventCount = 0
+  private val moneyRegex = Regex(
+    "(?:(?:﷼|SAR|SR|ر\\.?\\s?س|ريال)\\s*\\d+(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?\\s*(?:﷼|SAR|SR|ر\\.?\\s?س|ريال))",
+    RegexOption.IGNORE_CASE
+  )
+  private val moneyCaptureRegex = Regex(
+    "(?:(﷼|SAR|SR|ر\\.?\\s?س|ريال)\\s*(\\d+(?:[.,]\\d{1,2})?)|(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.?\\s?س|ريال))",
+    RegexOption.IGNORE_CASE
+  )
+  private val etaRegex = Regex(
+    "\\d+(?:[.,]\\d{1,2})?\\s*(?:min|mins|minute|minutes|دقيقة|دقائق|د)(?![\\p{L}])",
+    RegexOption.IGNORE_CASE
+  )
   private var settings = JSONObject()
   private val geocoderExecutor = Executors.newSingleThreadExecutor()
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -84,12 +99,20 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
     val target = JEENY
     if (event.packageName.toString() != target) return
+    eventCount++
     val roots = activeJeenyRoots()
-    if (roots.isEmpty()) return
+    if (roots.isEmpty()) {
+      recordSeen(prefs, "Jeeny events received but no readable window")
+      return
+    }
     val primaryRoot = roots.firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: roots.first()
     if (ensureOnline(primaryRoot)) return
     val allText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
-    if (allText.isBlank()) return
+    if (allText.isBlank()) {
+      recordSeen(prefs, "Jeeny events received but screen text is EMPTY (Jeeny may hide it from accessibility)")
+      return
+    }
+    recordSeen(prefs, "Seen: " + allText.take(300))
     if (!isJeenyOfferCard(allText)) return
     showStatusToast("Scanning ride…", 1200L)
     val candidate = parseDetails(allText)
@@ -330,24 +353,41 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val fareRegex = Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)[^0-9﷼]{0,36}(?:﷼|SAR|SR|ر\\.س)?\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(﷼|SAR|SR|ر\\.س)?", RegexOption.IGNORE_CASE)
     val pickupRegex = Regex("(?:(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)\\D{0,20}(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)|(?:^|[|])\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes)\\s*(?:away)?)", RegexOption.IGNORE_CASE)
     val destinationRegex = Regex("(?:destination|drop-?off|to|الوجهة|الى|إلى)\\s*[:：]?\\s*([^,;|]{2,80})", RegexOption.IGNORE_CASE)
-    val fare = fareRegex.find(text) ?: return null
-    val pickup = pickupRegex.find(text) ?: return null
-    val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim().orEmpty()
-    val currencyToken = when {
-      fare.groupValues[2].isNotBlank() -> fare.groupValues[2]
-      fare.value.contains("﷼") || fare.value.contains("SAR", true) || fare.value.contains("SR", true) || fare.value.contains("ر.س") || fare.value.contains("you'll", true) || fare.value.contains("you’ll", true) -> "SAR"
-      else -> ""
+    var amountText: String? = null
+    var currencyToken = ""
+    val keyed = fareRegex.find(text)
+    if (keyed != null) {
+      amountText = keyed.groupValues[1]
+      currencyToken = when {
+        keyed.groupValues[2].isNotBlank() -> keyed.groupValues[2]
+        keyed.value.contains("﷼") || keyed.value.contains("SAR", true) || keyed.value.contains("SR", true) || keyed.value.contains("ر.س") || keyed.value.contains("you'll", true) || keyed.value.contains("you’ll", true) -> "SAR"
+        else -> ""
+      }
+    }
+    if (amountText == null || currencyToken.isBlank()) {
+      val money = moneyCaptureRegex.find(text) ?: return null
+      amountText = money.groupValues[2].ifBlank { money.groupValues[3] }
+      currencyToken = money.groupValues[1].ifBlank { money.groupValues[4] }
     }
     if (currencyToken.isBlank()) return null
-    val amount = fare.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-    val etaText = pickup.groupValues.drop(1).firstOrNull(String::isNotBlank) ?: return null
+    val amount = (amountText ?: return null).replace(',', '.').toDoubleOrNull() ?: return null
+    val pickup = pickupRegex.find(text)
+    val etaText = pickup?.groupValues?.drop(1)?.firstOrNull(String::isNotBlank)
+      ?: Regex("(\\d+(?:[.,]\\d{1,2})?)\\s*(?:min|mins|minute|minutes|دقيقة|دقائق)", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)
+      ?: return null
     val eta = etaText.replace(',', '.').toDoubleOrNull() ?: return null
+    val destination = destinationRegex.find(text)?.groupValues?.get(1)?.trim().orEmpty()
     return Parsed(amount, normalizeCurrency(currencyToken), eta, destination)
   }
 
   private fun isJeenyOfferCard(text: String): Boolean {
     val normalized = text.lowercase(Locale.ROOT)
-    return normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("net earning") || normalized.contains("accept offer") || normalized.contains("قبول العرض") || normalized.contains("mins away") || normalized.contains("﷼")
+    val legacy = normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("net earning") || normalized.contains("accept offer") || normalized.contains("قبول العرض") || normalized.contains("mins away") || normalized.contains("﷼")
+    if (legacy) return true
+    val hasMoney = moneyRegex.containsMatchIn(text)
+    val hasEta = etaRegex.containsMatchIn(text)
+    val hasAccept = listOf("accept", "قبول", "اقبل").any(normalized::contains)
+    return hasMoney && (hasEta || hasAccept)
   }
 
   private fun matchesRules(parsed: Parsed): Boolean {
@@ -438,9 +478,12 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     return 6371000.0 * 2 * atan2(sqrt(h), sqrt(1 - h))
   }
 
-  private fun normalizeCurrency(value: String): String = when (value.uppercase(Locale.ROOT)) {
-    "SR", "ر.س", "﷼" -> "SAR"
-    else -> value.uppercase(Locale.ROOT)
+  private fun normalizeCurrency(value: String): String {
+    val v = value.uppercase(Locale.ROOT).replace(" ", "").replace(".", "")
+    return when (v) {
+      "SR", "رس", "﷼", "ريال", "SAR" -> "SAR"
+      else -> v
+    }
   }
 
   private fun collectText(node: AccessibilityNodeInfo): List<String> {
@@ -524,6 +567,13 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (now - lastToastAt < cooldownMs) return
     lastToastAt = now
     mainHandler.post { Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show() }
+  }
+
+  private fun recordSeen(prefs: SharedPreferences, note: String) {
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastSeenWriteAt < 1000) return
+    lastSeenWriteAt = now
+    prefs.edit().putString("lastSeen", "$note [events: $eventCount]").apply()
   }
 
   override fun onInterrupt() {}

@@ -57,7 +57,8 @@ class HiAcceptorModule : Module() {
       mapOf(
         "enabled" to prefs.getBoolean("operationEnabled", false),
         "accessibilityEnabled" to enabledServices.split(":").any { it.equals(expected, true) },
-        "lastEvent" to (prefs.getString("lastEvent", null) ?: "No request processed yet")
+        "lastEvent" to (prefs.getString("lastEvent", null) ?: "No request processed yet"),
+        "lastSeen" to (prefs.getString("lastSeen", null) ?: "Nothing seen from Jeeny yet")
       )
     }
   }
