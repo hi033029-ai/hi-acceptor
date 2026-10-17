@@ -37,15 +37,16 @@ async function collectAreaNames(latitude: number, longitude: number, radiusMeter
   return [...names].slice(0, 40);
 }
 
-type PermissionState = { accessibility: boolean; foreground: boolean; background: boolean };
+type PermissionState = { accessibility: boolean; foreground: boolean };
 
 type EditingArea = { existing?: AreaCircle; draft: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">; label: string };
 
 export default function HomeScreen() {
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
-  const [permissions, setPermissions] = useState<PermissionState>({ accessibility: false, foreground: false, background: false });
+  const [permissions, setPermissions] = useState<PermissionState>({ accessibility: false, foreground: false });
   const [enabled, setEnabled] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [serviceStatus, setServiceStatus] = useState("No request processed yet");
   const [editingArea, setEditingArea] = useState<EditingArea | null>(null);
   const [language, setLanguage] = useState<AppLanguage | null>(null);
   const [languageDraft, setLanguageDraft] = useState<AppLanguage>("en");
@@ -63,14 +64,14 @@ export default function HomeScreen() {
 
   const refresh = useCallback(async () => {
     await saveQueueRef.current.catch(() => undefined);
-    const [stored, storedEnabled, accessibility, nativeStatus, foreground, background] = await Promise.all([
+    const [stored, storedEnabled, accessibility, nativeStatus, foreground] = await Promise.all([
       loadSettings(), loadOperationEnabled(), isAccessibilityEnabled(), getNativeStatus(),
       Location.getForegroundPermissionsAsync().catch(() => ({ status: "denied" as const })),
-      Location.getBackgroundPermissionsAsync().catch(() => ({ status: "denied" as const })),
     ]);
     setSettings(stored);
-    setPermissions({ accessibility, foreground: foreground.status === "granted", background: background.status === "granted" });
+    setPermissions({ accessibility, foreground: foreground.status === "granted" });
     setEnabled(hasNativeAcceptor && accessibility && storedEnabled && nativeStatus.enabled);
+    setServiceStatus(nativeStatus.lastEvent ?? "No request processed yet");
     if (hasNativeAcceptor) await saveNativeSettings({ ...stored, targetPackage: supported[stored.targetApp] });
   }, []);
 
@@ -110,16 +111,12 @@ export default function HomeScreen() {
   const requestLocation = async () => {
     const foreground = await Location.requestForegroundPermissionsAsync();
     if (foreground.status !== "granted") {
-      Alert.alert("Location permission required", "Allow location while using the app first. Android requires this before background location can be requested.");
+      Alert.alert("Location permission required", "Allow location while using the app to center the exclusion map. Background location is not required for ride filtering.");
       await refresh();
       return false;
     }
-    const background = await Location.requestBackgroundPermissionsAsync();
-    if (background.status !== "granted") {
-      Alert.alert("Background location not enabled", "Open Android settings and allow HI Acceptor to use location all the time, then press Start again.");
-    }
     await refresh();
-    return background.status === "granted";
+    return true;
   };
 
   const openAccessibility = async () => {
@@ -167,7 +164,7 @@ export default function HomeScreen() {
       return;
     }
     try {
-      if (!permissions.foreground || !permissions.background) {
+      if (!permissions.foreground) {
         if (!(await requestLocation())) return;
       }
       if (!(await save())) return;
@@ -233,13 +230,13 @@ export default function HomeScreen() {
 
       <View style={{ backgroundColor: ink, borderRadius: 22, padding: 19, marginBottom: 12 }}>
         <View style={rowBetween}><View><Text style={{ color: "#A8C4C4", fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>{text.automation}</Text><Text style={{ color: "white", fontSize: 24, fontWeight: "800", marginTop: 5 }}>{enabled ? text.running : text.stopped}</Text></View><Pressable onPress={() => void toggleAutomation()} style={{ backgroundColor: enabled ? red : teal, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 18 }}><Text style={{ color: "white", fontWeight: "900" }}>{enabled ? text.stop : text.start}</Text></Pressable></View>
+        <Text style={{ color: "#C9DDDB", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
       </View>
 
       <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>
         <PermissionRow label={text.accessibility} granted={permissions.accessibility} action={() => void openAccessibility()} actionLabel={text.openSettings} />
         <PermissionRow label={text.locationForeground} granted={permissions.foreground} action={() => void requestLocation()} actionLabel={text.allow} />
-        <PermissionRow label={text.locationBackground} granted={permissions.background} action={() => void requestLocation()} actionLabel={text.allow} />
-        <Text style={finePrint}>Accessibility reads only the selected driver app. Location permission is used for live location services and Android background operation. You can revoke permissions in Android Settings.</Text>
+        <Text style={finePrint}>Accessibility reads Jeeny Driver while you use other apps. Foreground location is used only to center the exclusion map. You can revoke permissions in Android Settings.</Text>
       </View>
 
       <View style={card}><Text style={title}>{text.rideCriteria}</Text><Text style={helper}>{text.criteriaHelp} Otherwise it is skipped or declined when the driver app exposes a clear decline control.</Text>
@@ -253,7 +250,7 @@ export default function HomeScreen() {
       <View style={card}><View style={rowBetween}><Text style={title}>{text.exclude}</Text><Text style={{ color: tealDark, fontWeight: "900" }}>{settings.excludedAreas.length}/{MAX_EXCLUDED_AREAS}</Text></View><Text style={helper}>{text.excludeHelp}</Text>
         {settings.excludedAreas.map((area) => <View key={area.id} style={areaRow}><View style={rowBetween}><Text style={{ color: ink, fontWeight: "800", flex: 1 }}>{area.label}</Text><Pressable onPress={() => void removeArea(area.id)}><Text style={{ color: red, fontWeight: "800" }}>{text.remove}</Text></Pressable></View><Text style={{ color: muted, fontSize: 11, marginTop: 4 }}>{area.latitude.toFixed(5)}, {area.longitude.toFixed(5)} · {area.radiusMeters >= 1000 ? `${(area.radiusMeters / 1000).toFixed(area.radiusMeters % 1000 ? 1 : 0)} km` : `${area.radiusMeters} m`}</Text></View>)}
         <Pressable onPress={beginAddArea} style={secondaryButton}><Text style={{ color: tealDark, fontWeight: "900" }}>{text.chooseExcluded}</Text></Pressable>
-        {!mapsApiKey && <Text style={{ color: "#9A661C", fontSize: 11, lineHeight: 16, marginTop: 10 }}>Google Maps API key is not configured. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY before building to enable the live Google map picker.</Text>}
+        {!mapsApiKey && <Text style={{ color: tealDark, fontSize: 11, lineHeight: 16, marginTop: 10 }}>Google Maps key not configured. The picker uses OpenStreetMap instead.</Text>}
       </View>
 
       <Pressable onPress={() => void save()} style={primaryButton}><Text style={primaryText}>{saved ? text.saved : text.saveRules}</Text></Pressable>
