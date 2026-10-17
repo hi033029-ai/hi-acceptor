@@ -80,7 +80,7 @@ export default function RulesScreen() {
       </View>
       <View style={card}>
         <Text style={title}>Location matching and privacy</Text>
-        <Text style={helper}>HI Acceptor compares destination coordinates with circles saved on this device. If Android cannot resolve a destination location, the request is skipped instead of guessed. The map loads OpenStreetMap tiles while you view it. Android system Geocoder may send the destination name to a device geocoding provider; use the privacy settings and OS controls you prefer.</Text>
+        <Text style={helper}>HI Acceptor compares destination coordinates with circles saved on this device. If Android cannot resolve a destination location, the request is skipped instead of guessed. Coordinates can be entered directly or filled from your current location. Android system Geocoder may send the destination name to a device geocoding provider; use the privacy settings and OS controls you prefer.</Text>
       </View>
       <Pressable onPress={() => void commit()} style={{ backgroundColor: teal, paddingVertical: 16, borderRadius: 15, alignItems: "center" }}><Text style={{ color: "white", fontWeight: "800" }}>{saved ? "SAVED ON THIS DEVICE" : "SAVE RULES"}</Text></Pressable>
       <Text style={{ color: muted, marginTop: 14, fontSize: 12, lineHeight: 18 }}>No HI Acceptor account or activation is needed. Areas, fare rules, and status remain local.</Text>
