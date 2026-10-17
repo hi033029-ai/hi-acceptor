@@ -1,89 +1,140 @@
-import { useEffect, useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Keyboard, Pressable, Text, TextInput, View } from "react-native";
+import MapView, { Circle, Marker, PROVIDER_GOOGLE, type LatLng, type Region } from "react-native-maps";
 import * as Location from "expo-location";
 import type { AreaCircle } from "@/lib/ride-rules";
 
 type Props = {
   area?: AreaCircle | null;
   region: "SA" | "JO";
+  mapsApiKey?: string;
   onChange: (point: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">) => void;
 };
 
-const DEFAULTS = {
+const CENTERS: Record<"SA" | "JO", LatLng> = {
   SA: { latitude: 24.7136, longitude: 46.6753 },
   JO: { latitude: 31.9539, longitude: 35.9106 },
-} as const;
+};
+const COUNTRY_HINT: Record<"SA" | "JO", string> = { SA: "Saudi Arabia", JO: "Jordan" };
+const MIN_RADIUS = 250;
+const MAX_RADIUS = 10000;
+const STEP = 250;
+const PRESETS = [500, 1000, 2000, 5000, 10000];
+const ink = "#102532";
+const teal = "#087d70";
+const tealLight = "#20B7A5";
+const border = "#DDE6E4";
+const bg = "#edf2f1";
+const clampRadius = (value: number) => Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, Math.round(value / STEP) * STEP));
 
-export function AreaPicker({ area, region, onChange }: Props) {
-  const fallback = DEFAULTS[region];
-  const [latitude, setLatitude] = useState(String(area?.latitude ?? fallback.latitude));
-  const [longitude, setLongitude] = useState(String(area?.longitude ?? fallback.longitude));
-  const [radiusMeters, setRadiusMeters] = useState(String(area?.radiusMeters ?? 1000));
-  const [locating, setLocating] = useState(false);
+function regionFor(center: LatLng, radiusMeters: number): Region {
+  const delta = Math.max((radiusMeters * 3.2) / 111320, 0.01);
+  return { latitude: center.latitude, longitude: center.longitude, latitudeDelta: delta, longitudeDelta: delta };
+}
 
-  useEffect(() => {
-    setLatitude(String(area?.latitude ?? fallback.latitude));
-    setLongitude(String(area?.longitude ?? fallback.longitude));
-    setRadiusMeters(String(area?.radiusMeters ?? 1000));
-  }, [area?.id, area?.latitude, area?.longitude, area?.radiusMeters, fallback.latitude, fallback.longitude]);
+function formatRadius(radius: number) {
+  return radius >= 1000 ? `${(radius / 1000).toFixed(radius % 1000 ? 2 : 0).replace(/\.?0+$/, "")} km` : `${radius} m`;
+}
 
-  const publish = (next?: { latitude?: string; longitude?: string; radiusMeters?: string }) => {
-    const lat = Number(next?.latitude ?? latitude);
-    const lon = Number(next?.longitude ?? longitude);
-    const radius = Number(next?.radiusMeters ?? radiusMeters);
-    if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180 || !Number.isFinite(radius) || radius < 250) return;
-    onChange({ latitude: lat, longitude: lon, radiusMeters: Math.min(10000, Math.round(radius)) });
-  };
+export function AreaPicker({ area, region, mapsApiKey, onChange }: Props) {
+  const mapRef = useRef<MapView>(null);
+  const initialCenter: LatLng = area ? { latitude: area.latitude, longitude: area.longitude } : CENTERS[region];
+  const initialRadius = clampRadius(area?.radiusMeters ?? 1000);
+  const [point, setPoint] = useState<LatLng>(initialCenter);
+  const [radius, setRadius] = useState(initialRadius);
+  const radiusRef = useRef(initialRadius);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [hasLocation, setHasLocation] = useState(false);
 
-  const useMyLocation = async () => {
-    setLocating(true);
+  const commit = useCallback((next: LatLng, nextRadius: number, moveCamera = false) => {
+    const safeRadius = clampRadius(nextRadius);
+    radiusRef.current = safeRadius;
+    setPoint(next);
+    setRadius(safeRadius);
+    onChange({ latitude: next.latitude, longitude: next.longitude, radiusMeters: safeRadius });
+    if (moveCamera) mapRef.current?.animateToRegion(regionFor(next, safeRadius), 400);
+  }, [onChange]);
+
+  const locate = useCallback(async (silent = false) => {
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
+      setBusy(true);
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (permission.status !== "granted" && !silent) permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== "granted") {
-        Alert.alert("Location unavailable", "Allow location permission for HI Acceptor and try again.");
+        if (!silent) Alert.alert("Location permission needed", "Allow location while using the app to center the map on you.");
         return;
       }
+      setHasLocation(true);
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const next = {
-        latitude: position.coords.latitude.toFixed(6),
-        longitude: position.coords.longitude.toFixed(6),
-      };
-      setLatitude(next.latitude);
-      setLongitude(next.longitude);
-      publish(next);
+      commit({ latitude: position.coords.latitude, longitude: position.coords.longitude }, radiusRef.current, true);
     } catch {
-      Alert.alert("Location unavailable", "Unable to read your current location.");
+      if (!silent) Alert.alert("Location unavailable", "Could not get your location. Tap the map to choose a point instead.");
     } finally {
-      setLocating(false);
+      setBusy(false);
     }
-  };
+  }, [commit]);
+
+  useEffect(() => {
+    if (!area) {
+      onChange({ latitude: initialCenter.latitude, longitude: initialCenter.longitude, radiusMeters: initialRadius });
+      void locate(true);
+    } else {
+      void Location.getForegroundPermissionsAsync().then((p) => setHasLocation(p.status === "granted")).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const search = useCallback(async () => {
+    const text = query.trim();
+    if (!text) return;
+    Keyboard.dismiss();
+    setBusy(true);
+    try {
+      const alreadyHasCountry = /saudi|jordan|السعودية|الأردن|الاردن/i.test(text);
+      const results = await Location.geocodeAsync(alreadyHasCountry ? text : `${text}, ${COUNTRY_HINT[region]}`);
+      const first = results[0];
+      if (!first) {
+        Alert.alert("Place not found", "Try another spelling, or tap the map to choose the point.");
+        return;
+      }
+      commit({ latitude: first.latitude, longitude: first.longitude }, radiusRef.current, true);
+    } catch {
+      Alert.alert("Search unavailable", "Android could not look up that place. Tap the map to choose the point instead.");
+    } finally {
+      setBusy(false);
+    }
+  }, [commit, query, region]);
+
+  const changeRadius = (next: number) => commit(point, next, true);
 
   return (
-    <View style={{ borderRadius: 16, borderWidth: 1, borderColor: "#DDE6E4", backgroundColor: "#F5F9F8", padding: 14 }}>
-      <Text style={{ color: "#102532", fontWeight: "800", fontSize: 14 }}>Excluded area center</Text>
-      <Text style={{ color: "#56706F", fontSize: 12, lineHeight: 17, marginTop: 5 }}>
-        Enter coordinates or use your current location. The saved circle is applied to Jeeny destinations.
-      </Text>
-      <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: "#56706F", fontSize: 11, fontWeight: "700", marginBottom: 4 }}>Latitude</Text>
-          <TextInput value={latitude} onChangeText={setLatitude} onEndEditing={() => publish()} keyboardType="numbers-and-punctuation" style={{ backgroundColor: "white", borderWidth: 1, borderColor: "#C9DDDB", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: "#102532" }} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: "#56706F", fontSize: 11, fontWeight: "700", marginBottom: 4 }}>Longitude</Text>
-          <TextInput value={longitude} onChangeText={setLongitude} onEndEditing={() => publish()} keyboardType="numbers-and-punctuation" style={{ backgroundColor: "white", borderWidth: 1, borderColor: "#C9DDDB", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: "#102532" }} />
-        </View>
+    <View style={{ borderRadius: 16, borderWidth: 1, borderColor: border, overflow: "hidden", backgroundColor: "white" }}>
+      <View style={{ flexDirection: "row", padding: 8, gap: 8 }}>
+        <TextInput value={query} onChangeText={setQuery} onSubmitEditing={() => void search()} placeholder="Search a neighborhood or place" placeholderTextColor="#8AA0A0" returnKeyType="search" style={{ flex: 1, backgroundColor: bg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, color: ink, fontSize: 14 }} />
+        <Pressable onPress={() => void search()} style={{ backgroundColor: teal, borderRadius: 10, paddingHorizontal: 14, justifyContent: "center" }}><Text style={{ color: "white", fontWeight: "800" }}>Search</Text></Pressable>
       </View>
-      <View style={{ marginTop: 10 }}>
-        <Text style={{ color: "#56706F", fontSize: 11, fontWeight: "700", marginBottom: 4 }}>Radius in metres (250–10,000)</Text>
-        <TextInput value={radiusMeters} onChangeText={setRadiusMeters} onEndEditing={() => publish()} keyboardType="number-pad" style={{ backgroundColor: "white", borderWidth: 1, borderColor: "#C9DDDB", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: "#102532" }} />
+      <View style={{ height: 340 }}>
+        <MapView ref={mapRef} provider={PROVIDER_GOOGLE} style={{ flex: 1 }} initialRegion={regionFor(initialCenter, initialRadius)} onPress={(event) => commit(event.nativeEvent.coordinate, radiusRef.current)} showsUserLocation={hasLocation} showsMyLocationButton={false} toolbarEnabled={false} rotateEnabled={false} pitchEnabled={false}>
+          <Circle center={point} radius={radius} strokeColor={tealLight} strokeWidth={3} fillColor="rgba(32,183,165,0.22)" />
+          <Marker coordinate={point} draggable onDragEnd={(event) => commit(event.nativeEvent.coordinate, radiusRef.current)} />
+        </MapView>
+        {busy && <View style={{ position: "absolute", top: 10, alignSelf: "center", backgroundColor: "white", borderRadius: 14, padding: 8, elevation: 3 }}><ActivityIndicator color={teal} /></View>}
+        <Pressable onPress={() => void locate(false)} style={{ position: "absolute", right: 10, bottom: 10, backgroundColor: "white", borderRadius: 22, paddingVertical: 10, paddingHorizontal: 14, elevation: 3 }}><Text style={{ color: teal, fontWeight: "800" }}>My location</Text></Pressable>
       </View>
-      <Pressable onPress={() => void useMyLocation()} disabled={locating} style={{ marginTop: 12, backgroundColor: locating ? "#8DBAB4" : "#087D70", borderRadius: 10, paddingVertical: 11, alignItems: "center" }}>
-        <Text style={{ color: "white", fontWeight: "800" }}>{locating ? "Locating…" : "Use my location"}</Text>
-      </Pressable>
-      <Pressable onPress={() => publish()} style={{ marginTop: 8, borderWidth: 1, borderColor: "#087D70", borderRadius: 10, paddingVertical: 10, alignItems: "center" }}>
-        <Text style={{ color: "#087D70", fontWeight: "800" }}>Apply area</Text>
-      </Pressable>
+      <View style={{ padding: 12, gap: 10 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Pressable onPress={() => changeRadius(radius - STEP)} style={stepButton}><Text style={stepText}>−</Text></Pressable>
+          <View style={{ alignItems: "center" }}><Text style={{ color: ink, fontSize: 18, fontWeight: "900" }}>{formatRadius(radius)}</Text><Text style={{ color: "#6B8080", fontSize: 11 }}>excluded radius</Text></View>
+          <Pressable onPress={() => changeRadius(radius + STEP)} style={stepButton}><Text style={stepText}>+</Text></Pressable>
+        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{PRESETS.map((preset) => { const active = preset === radius; return <Pressable key={preset} onPress={() => changeRadius(preset)} style={{ backgroundColor: active ? teal : bg, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 }}><Text style={{ color: active ? "white" : ink, fontWeight: "700", fontSize: 12 }}>{formatRadius(preset)}</Text></Pressable>; })}</View>
+        <Text style={{ color: "#6B8080", fontSize: 11 }}>Tap the map or drag the pin to set the center · {point.latitude.toFixed(5)}, {point.longitude.toFixed(5)}</Text>
+        {!mapsApiKey && <Text style={{ color: "#9A661C", fontSize: 11, lineHeight: 16 }}>Google Maps key is not configured in this build. Rebuild with EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.</Text>}
+      </View>
     </View>
   );
 }
+
+const stepButton = { width: 44, height: 44, borderRadius: 22, backgroundColor: bg, alignItems: "center" as const, justifyContent: "center" as const };
+const stepText = { color: ink, fontSize: 24, fontWeight: "800" as const, marginTop: -2 };

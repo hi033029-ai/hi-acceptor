@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Alert, BackHandler, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
 import { ScreenContainer } from "@/components/screen-container";
 import { AreaPicker } from "@/components/AreaPicker";
 import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, launchJeeny, openAccessibilitySettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
@@ -16,6 +17,7 @@ const tealDark = "#087D70";
 const border = "#DDE6E4";
 const red = "#B34842";
 const supported = { jeeny: "me.com.easytaxista" } as const;
+const mapsApiKey = String(Constants.expoConfig?.extra?.googleMapsApiKey ?? "");
 
 async function collectAreaNames(latitude: number, longitude: number, radiusMeters: number) {
   const offsets = [[0, 0], [0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]];
@@ -223,7 +225,7 @@ export default function HomeScreen() {
     return <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-4 pt-3">
       <ScrollView contentContainerStyle={{ paddingBottom: 30 }}>
         <View style={rowBetween}><View><Text style={brand}>{text.excludeTitle}</Text><Text style={subtitle}>{text.excludeSubtitle}</Text></View><Pressable onPress={() => setEditingArea(null)}><Text style={{ color: red, fontWeight: "800" }}>{text.cancel}</Text></Pressable></View>
-        <View style={{ marginTop: 18 }}><AreaPicker key="new-exclusion" area={preview} region={settings.region} onChange={(point) => setEditingArea((current) => current ? { ...current, draft: point } : current)} /></View>
+        <View style={{ marginTop: 18 }}><AreaPicker key="new-exclusion" area={preview} region={settings.region} mapsApiKey={mapsApiKey} onChange={(point) => setEditingArea((current) => current ? { ...current, draft: point } : current)} /></View>
         <Text style={label}>EXCLUSION LABEL</Text>
         <TextInput value={editingArea.label} onChangeText={(label) => setEditingArea((current) => current ? { ...current, label } : current)} placeholder="e.g. Airport or downtown" style={input} />
         <Pressable onPress={saveArea} style={primaryButton}><Text style={primaryText}>{text.saveExcluded}</Text></Pressable>
