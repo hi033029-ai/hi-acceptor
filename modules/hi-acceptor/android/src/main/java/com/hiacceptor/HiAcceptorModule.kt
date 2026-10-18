@@ -2,6 +2,7 @@ package com.hiacceptor
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import android.text.TextUtils
 import expo.modules.kotlin.modules.Module
@@ -23,6 +24,12 @@ class HiAcceptorModule : Module() {
     AsyncFunction("openAccessibilitySettings") {
       val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       appContext.reactContext?.startActivity(intent)
+    }
+
+    AsyncFunction("openAppSettings") {
+      val context = appContext.reactContext!!
+      val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      context.startActivity(intent)
     }
 
     AsyncFunction("setOperationEnabled") { enabled: Boolean ->
@@ -58,7 +65,8 @@ class HiAcceptorModule : Module() {
         "enabled" to prefs.getBoolean("operationEnabled", false),
         "accessibilityEnabled" to enabledServices.split(":").any { it.equals(expected, true) },
         "lastEvent" to (prefs.getString("lastEvent", null) ?: "No request processed yet"),
-        "lastSeen" to (prefs.getString("lastSeen", null) ?: "Nothing seen from Jeeny yet")
+        "lastSeen" to (prefs.getString("lastSeen", null) ?: "Nothing seen from Jeeny yet"),
+        "outcomeStats" to (prefs.getString("outcomeStats", "{}") ?: "{}")
       )
     }
   }

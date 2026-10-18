@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import Constants from "expo-constants";
 import { ScreenContainer } from "@/components/screen-container";
 import { AreaPicker } from "@/components/AreaPicker";
 import { DEFAULT_SETTINGS, MAX_EXCLUDED_AREAS, createArea, loadSettings, saveSettings, type StoredSettings } from "@/lib/hi-acceptor-store";
@@ -8,7 +7,6 @@ import { saveNativeSettings } from "@/lib/hi-acceptor-native";
 import type { AreaCircle } from "@/lib/ride-rules";
 
 const ink = "#102532", muted = "#5E707A", teal = "#20B7A5", border = "#DDE6E4";
-const mapsApiKey = String(Constants.expoConfig?.extra?.googleMapsApiKey ?? "");
 type Editing = { kind: "excluded" | "preferred"; existing?: AreaCircle };
 export default function RulesScreen() {
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
@@ -90,7 +88,7 @@ export default function RulesScreen() {
     {editing && <View style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: "#F3F6F5", paddingHorizontal: 14, paddingTop: 48, paddingBottom: 12 }}>
       <View style={rowBetween}><Text style={{ color: ink, fontSize: 22, fontWeight: "800" }}>{editing.kind === "excluded" ? "Exclude an area" : "Preferred area"}</Text><Pressable onPress={() => setEditing(null)}><Text style={{ color: muted, fontSize: 16 }}>Cancel</Text></Pressable></View>
       <Text style={helper}>Move the map and tap to put the circle center. Set its radius from 250 m to 10 km.</Text>
-      <View style={{ marginTop: 14, height: 350 }}><AreaPicker key={`${editing.kind}-${currentArea?.id ?? "new"}`} area={previewArea} region={settings.region} mapsApiKey={mapsApiKey} onChange={setDraft} /></View>
+      <View style={{ marginTop: 14, height: 350 }}><AreaPicker key={`${editing.kind}-${currentArea?.id ?? "new"}`} area={previewArea} region={settings.region} onChange={setDraft} /></View>
       <Text style={label}>AREA NAME (OPTIONAL)</Text>
       <TextInput value={zoneLabel} onChangeText={setZoneLabel} placeholder="e.g. Airport area" style={{ borderWidth: 1, borderColor: border, borderRadius: 12, padding: 12, marginTop: 6, color: ink, backgroundColor: "white" }} />
       <Pressable onPress={saveAreaDraft} style={{ marginTop: 14, backgroundColor: teal, paddingVertical: 15, borderRadius: 15, alignItems: "center" }}><Text style={{ color: "white", fontWeight: "800" }}>SAVE THIS CIRCLE</Text></Pressable>

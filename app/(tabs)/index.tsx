@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Alert, BackHandler, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
-import Constants from "expo-constants";
 import { ScreenContainer } from "@/components/screen-container";
 import { AreaPicker } from "@/components/AreaPicker";
-import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, launchJeeny, openAccessibilitySettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
+import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, launchJeeny, openAccessibilitySettings, openAppSettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
 import { DEFAULT_SETTINGS, MAX_EXCLUDED_AREAS, createArea, loadOperationEnabled, loadSettings, saveOperationEnabled, saveSettings, type StoredSettings } from "@/lib/hi-acceptor-store";
 import type { AreaCircle } from "@/lib/ride-rules";
 import { languageNames, loadLanguage, saveLanguage, translations, type AppLanguage } from "@/lib/i18n";
@@ -17,7 +16,6 @@ const tealDark = "#087D70";
 const border = "#DDE6E4";
 const red = "#B34842";
 const supported = { jeeny: "me.com.easytaxista" } as const;
-const mapsApiKey = String(Constants.expoConfig?.extra?.googleMapsApiKey ?? "");
 
 async function collectAreaNames(latitude: number, longitude: number, radiusMeters: number) {
   const offsets = [[0, 0], [0.45, 0], [-0.45, 0], [0, 0.45], [0, -0.45]];
@@ -40,6 +38,12 @@ async function collectAreaNames(latitude: number, longitude: number, radiusMeter
 type PermissionState = { accessibility: boolean; foreground: boolean };
 
 type EditingArea = { existing?: AreaCircle; draft: Pick<AreaCircle, "latitude" | "longitude" | "radiusMeters">; label: string };
+type OutcomeDay = { accepted?: number; declined?: number };
+type OutcomeStats = { lifetime?: OutcomeDay; days?: Record<string, OutcomeDay> };
+
+function parseOutcomeStats(raw?: string): OutcomeStats {
+  try { return raw ? JSON.parse(raw) as OutcomeStats : {}; } catch { return {}; }
+}
 
 export default function HomeScreen() {
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
@@ -47,6 +51,7 @@ export default function HomeScreen() {
   const [enabled, setEnabled] = useState(false);
   const [saved, setSaved] = useState(false);
   const [serviceStatus, setServiceStatus] = useState("No request processed yet");
+  const [outcomeStats, setOutcomeStats] = useState<OutcomeStats>({});
   const [editingArea, setEditingArea] = useState<EditingArea | null>(null);
   const [language, setLanguage] = useState<AppLanguage | null>(null);
   const [languageDraft, setLanguageDraft] = useState<AppLanguage>("en");
@@ -72,6 +77,7 @@ export default function HomeScreen() {
     setPermissions({ accessibility, foreground: foreground.status === "granted" });
     setEnabled(hasNativeAcceptor && accessibility && storedEnabled && nativeStatus.enabled);
     setServiceStatus(nativeStatus.lastEvent ?? "No request processed yet");
+    setOutcomeStats(parseOutcomeStats(nativeStatus.outcomeStats));
     if (hasNativeAcceptor) await saveNativeSettings({ ...stored, targetPackage: supported[stored.targetApp] });
   }, []);
 
@@ -91,7 +97,10 @@ export default function HomeScreen() {
     if (!hasNativeAcceptor) return;
     const id = setInterval(async () => {
       const status = await getNativeStatus().catch(() => null);
-      if (status) setServiceStatus(`${status.lastEvent ?? "No request processed yet"}\n${status.lastSeen ?? ""}`);
+      if (status) {
+        setServiceStatus(`${status.lastEvent ?? "No request processed yet"}\n${status.lastSeen ?? ""}`);
+        setOutcomeStats(parseOutcomeStats(status.outcomeStats));
+      }
     }, 2000);
     return () => clearInterval(id);
   }, []);
@@ -225,7 +234,7 @@ export default function HomeScreen() {
     return <ScreenContainer containerClassName="bg-[#F3F6F5]" className="px-4 pt-3">
       <ScrollView contentContainerStyle={{ paddingBottom: 30 }}>
         <View style={rowBetween}><View><Text style={brand}>{text.excludeTitle}</Text><Text style={subtitle}>{text.excludeSubtitle}</Text></View><Pressable onPress={() => setEditingArea(null)}><Text style={{ color: red, fontWeight: "800" }}>{text.cancel}</Text></Pressable></View>
-        <View style={{ marginTop: 18 }}><AreaPicker key="new-exclusion" area={preview} region={settings.region} mapsApiKey={mapsApiKey} onChange={(point) => setEditingArea((current) => current ? { ...current, draft: point } : current)} /></View>
+        <View style={{ marginTop: 18 }}><AreaPicker key="new-exclusion" area={preview} region={settings.region} onChange={(point) => setEditingArea((current) => current ? { ...current, draft: point } : current)} /></View>
         <Text style={label}>EXCLUSION LABEL</Text>
         <TextInput value={editingArea.label} onChangeText={(label) => setEditingArea((current) => current ? { ...current, label } : current)} placeholder="e.g. Airport or downtown" style={input} />
         <Pressable onPress={saveArea} style={primaryButton}><Text style={primaryText}>{text.saveExcluded}</Text></Pressable>
@@ -245,8 +254,11 @@ export default function HomeScreen() {
       <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>
         <PermissionRow label={text.accessibility} granted={permissions.accessibility} action={() => void openAccessibility()} actionLabel={text.openSettings} />
         <PermissionRow label={text.locationForeground} granted={permissions.foreground} action={() => void requestLocation()} actionLabel={text.allow} />
+        {hasNativeAcceptor && <Pressable onPress={() => void openAppSettings()} style={secondaryButton}><Text style={{ color: tealDark, fontWeight: "900" }}>OPEN HI ACCEPTOR APP SETTINGS</Text></Pressable>}
         <Text style={finePrint}>Accessibility reads Jeeny Driver while you use other apps. Foreground location is used only to center the exclusion map. You can revoke permissions in Android Settings.</Text>
       </View>
+
+      <OutcomeCard stats={outcomeStats} />
 
       <View style={card}><Text style={title}>{text.rideCriteria}</Text><Text style={helper}>{text.criteriaHelp} Otherwise it is skipped or declined when the driver app exposes a clear decline control.</Text>
         <Text style={label}>{text.driverApp}</Text><View style={{ flexDirection: "row" }}><Choice label="Jeeny Driver" selected onPress={() => update("targetApp", "jeeny")} /></View>
@@ -281,6 +293,22 @@ function WelcomeScreen({ selected, onSelect, onContinue }: { selected: AppLangua
   </ScreenContainer>;
 }
 
+function OutcomeCard({ stats }: { stats: OutcomeStats }) {
+  const days = useMemo(() => Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    const key = date.toISOString().slice(0, 10);
+    return { key, label: `${date.getDate()}/${date.getMonth() + 1}`, ...(stats.days?.[key] ?? {}) };
+  }), [stats]);
+  const lifetime = stats.lifetime ?? {};
+  const max = Math.max(1, ...days.map((day) => (day.accepted ?? 0) + (day.declined ?? 0)));
+  return <View style={card}><Text style={title}>Ride decisions</Text><Text style={helper}>Only completed accept or decline actions are counted. Skipped offers and repeated screen events are not counted.</Text>
+    <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}><View style={statBox}><Text style={statNumber}>{lifetime.accepted ?? 0}</Text><Text style={statLabel}>Accepted total</Text></View><View style={statBox}><Text style={[statNumber, { color: red }]}>{lifetime.declined ?? 0}</Text><Text style={statLabel}>Declined total</Text></View></View>
+    <Text style={[label, { marginTop: 18 }]}>LAST 7 DAYS</Text><View style={{ height: 92, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 6 }}>{days.map((day) => { const acceptedHeight = ((day.accepted ?? 0) / max) * 62; const declinedHeight = ((day.declined ?? 0) / max) * 62; return <View key={day.key} style={{ flex: 1, alignItems: "center" }}><View style={{ height: 66, flexDirection: "row", alignItems: "flex-end", gap: 2 }}><View style={{ width: 7, height: Math.max(day.accepted ? 4 : 0, acceptedHeight), backgroundColor: teal, borderRadius: 4 }} /><View style={{ width: 7, height: Math.max(day.declined ? 4 : 0, declinedHeight), backgroundColor: red, borderRadius: 4 }} /></View><Text style={{ color: muted, fontSize: 9, marginTop: 4 }}>{day.label}</Text></View>; })}</View><View style={{ flexDirection: "row", gap: 14, marginTop: 8 }}><Text style={{ color: tealDark, fontSize: 10, fontWeight: "800" }}>● ACCEPTED</Text><Text style={{ color: red, fontSize: 10, fontWeight: "800" }}>● DECLINED</Text></View>
+  </View>;
+}
+
 function PermissionRow({ label: rowLabel, granted, action, actionLabel }: { label: string; granted: boolean; action: () => void; actionLabel: string }) {
   return <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 11, borderTopWidth: 1, borderTopColor: border }}><View style={{ flex: 1 }}><Text style={{ color: ink, fontWeight: "700" }}>{rowLabel}</Text><Text style={{ color: granted ? tealDark : red, fontSize: 11, marginTop: 3, fontWeight: "800" }}>{granted ? "GRANTED" : "NOT GRANTED"}</Text></View>{!granted && <Pressable onPress={action} style={{ borderWidth: 1, borderColor: teal, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 11 }}><Text style={{ color: tealDark, fontSize: 11, fontWeight: "900" }}>{actionLabel}</Text></Pressable>}</View>;
 }
@@ -300,3 +328,6 @@ const areaRow = { borderWidth: 1, borderColor: border, borderRadius: 11, padding
 const primaryButton = { backgroundColor: teal, borderRadius: 14, paddingVertical: 15, alignItems: "center" as const, marginBottom: 12 };
 const secondaryButton = { borderWidth: 1, borderColor: teal, borderRadius: 12, paddingVertical: 13, alignItems: "center" as const, marginTop: 12 };
 const primaryText = { color: "white", fontWeight: "900" as const, letterSpacing: 0.2 };
+const statBox = { flex: 1, backgroundColor: "#F3F8F7", borderRadius: 12, padding: 11 } as const;
+const statNumber = { color: tealDark, fontSize: 22, fontWeight: "900" as const };
+const statLabel = { color: muted, fontSize: 10, marginTop: 2 } as const;

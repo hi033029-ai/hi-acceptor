@@ -19,6 +19,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.atan2
@@ -121,7 +123,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val preferred = readCircle(settings.optJSONObject("preferredArea"))
     val destinationQuery = parsed?.destination ?: extractDestination(allText)
     if (candidate != null && parsed == null) {
-      val fingerprint = (target + "|" + allText.hashCode()).take(160)
+      val fingerprint = offerFingerprint(target, allText)
       rejectOrSkip(target, fingerprint, "Ride does not meet your saved fare, pickup-time, currency, or destination rules")
       return
     }
@@ -130,7 +132,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       if (reason.isNotBlank()) prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
       return
     }
-    val fingerprint = (target + "|" + allText.hashCode()).take(160)
+    val fingerprint = offerFingerprint(target, allText)
     val now = SystemClock.elapsedRealtime()
     if (fingerprint == lastFingerprint || fingerprint == pendingFingerprint || now - lastTapAt < 2500) return
 
@@ -181,6 +183,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+        recordOutcome(prefs, accepted = false)
         showStatusToast("Declined: $reason")
         scheduleMapRecenter()
         return
@@ -190,6 +193,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       lastFingerprint = fingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
+      recordOutcome(prefs, accepted = false)
       showStatusToast("Declined: $reason")
       scheduleMapRecenter()
       return
@@ -220,7 +224,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val root = activeJeenyRoots().firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: return
     if (root.packageName?.toString() != target) return
     val currentText = collectText(root).joinToString(" | ").take(5000)
-    val currentFingerprint = (target + "|" + currentText.hashCode()).take(160)
+    val currentFingerprint = offerFingerprint(target, currentText)
     val excluded = readCircles("excludedAreas")
     val preferred = readCircle(settings.optJSONObject("preferredArea"))
     val destinationText = extractDestination(currentText).orEmpty()
@@ -235,6 +239,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
           lastFingerprint = currentFingerprint
           lastTapAt = SystemClock.elapsedRealtime()
           prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+          recordOutcome(prefs, accepted = false)
           showStatusToast("Declined: excluded area")
           scheduleMapRecenter()
           return
@@ -250,12 +255,14 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        recordOutcome(prefs, accepted = false)
         showStatusToast("Declined: excluded area")
         scheduleMapRecenter()
       } else if (tapOfferCloseFallback()) {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '${excludedMatch.label}'").apply()
+        recordOutcome(prefs, accepted = false)
         showStatusToast("Declined: excluded area")
         scheduleMapRecenter()
       } else prefs.edit().putString("lastEvent", "Skipped: excluded-area decline control could not be activated").apply()
@@ -279,6 +286,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
+        recordOutcome(prefs, accepted = true)
         showStatusToast("Accepted matching ride")
         notifyAccepted()
       } else prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
@@ -289,12 +297,14 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", if (isPreferred) "Accepted a matching request inside preferred area '${preferred?.label}'" else "Accepted a request matching all configured rules").apply()
+      recordOutcome(prefs, accepted = true)
       showStatusToast("Accepted matching ride")
       notifyAccepted()
     } else if (tapAcceptFallback()) {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", "Accepted a request matching all configured rules").apply()
+      recordOutcome(prefs, accepted = true)
       showStatusToast("Accepted matching ride")
       notifyAccepted()
     } else prefs.edit().putString("lastEvent", "Skipped: accept control could not be activated").apply()
@@ -304,6 +314,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     mainHandler.postDelayed({
       val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
       if (!prefs.getBoolean("operationEnabled", false)) return@postDelayed
+      if (lastFingerprint == fingerprint) return@postDelayed
       val root = rootInActiveWindow ?: return@postDelayed
       if (root.packageName?.toString() != JEENY) return@postDelayed
       val node = findRejectNode(root, allowTopRightIcon = true)
@@ -312,6 +323,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
           lastFingerprint = fingerprint
           lastTapAt = SystemClock.elapsedRealtime()
           prefs.edit().putString("lastEvent", "Declined a request inside excluded area '$label'").apply()
+          recordOutcome(prefs, accepted = false)
           scheduleMapRecenter()
         }
         return@postDelayed
@@ -321,6 +333,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
         prefs.edit().putString("lastEvent", "Declined a request inside excluded area '$label'").apply()
+        recordOutcome(prefs, accepted = false)
         scheduleMapRecenter()
       }
     }, delayMs)
@@ -574,6 +587,26 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (now - lastSeenWriteAt < 1000) return
     lastSeenWriteAt = now
     prefs.edit().putString("lastSeen", "$note [events: $eventCount]").apply()
+  }
+
+  private fun offerFingerprint(target: String, text: String): String {
+    val normalized = text.lowercase(Locale.ROOT).replace(Regex("\\s+"), " ").trim()
+    return (target + "|" + normalized.hashCode()).take(160)
+  }
+
+  private fun recordOutcome(prefs: SharedPreferences, accepted: Boolean) {
+    val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+    val stats = runCatching { JSONObject(prefs.getString("outcomeStats", "{}") ?: "{}") }.getOrDefault(JSONObject())
+    val lifetime = stats.optJSONObject("lifetime") ?: JSONObject().also { stats.put("lifetime", it) }
+    val lifetimeKey = if (accepted) "accepted" else "declined"
+    lifetime.put(lifetimeKey, lifetime.optInt(lifetimeKey, 0) + 1)
+    val days = stats.optJSONObject("days") ?: JSONObject().also { stats.put("days", it) }
+    val day = days.optJSONObject(today) ?: JSONObject().also { days.put(today, it) }
+    day.put(lifetimeKey, day.optInt(lifetimeKey, 0) + 1)
+    val cutoff = java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, -6) }
+    val cutoffText = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cutoff.time)
+    days.keys().asSequence().filter { it < cutoffText }.toList().forEach { days.remove(it) }
+    prefs.edit().putString("outcomeStats", stats.toString()).apply()
   }
 
   override fun onInterrupt() {}

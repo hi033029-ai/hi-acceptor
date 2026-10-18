@@ -5,10 +5,11 @@ import type { RideSettings } from "@/lib/ride-rules";
 type NativeAcceptor = {
   isAccessibilityEnabled(): Promise<boolean>;
   openAccessibilitySettings(): Promise<void>;
+  openAppSettings(): Promise<void>;
   launchJeeny(): Promise<void>;
   setOperationEnabled(enabled: boolean): Promise<void>;
   saveSettings(settingsJson: string): Promise<void>;
-  getStatus(): Promise<{ enabled: boolean; accessibilityEnabled: boolean; lastEvent?: string; lastSeen?: string }>;
+  getStatus(): Promise<{ enabled: boolean; accessibilityEnabled: boolean; lastEvent?: string; lastSeen?: string; outcomeStats?: string }>;
 };
 
 const native = (() => {
@@ -29,6 +30,10 @@ export async function openAccessibilitySettings() {
   if (hasNativeAcceptor) await native!.openAccessibilitySettings();
 }
 
+export async function openAppSettings() {
+  if (hasNativeAcceptor) await native!.openAppSettings();
+}
+
 export async function setOperationEnabled(enabled: boolean) {
   if (hasNativeAcceptor) await native!.setOperationEnabled(enabled);
 }
@@ -44,5 +49,5 @@ export async function saveNativeSettings(settings: RideSettings & { targetPackag
 export async function getNativeStatus() {
   return hasNativeAcceptor
     ? native!.getStatus()
-    : { enabled: false, accessibilityEnabled: false, lastEvent: "Simulator only — Android Accessibility is unavailable in this preview.", lastSeen: "Nothing seen from Jeeny yet" };
+    : { enabled: false, accessibilityEnabled: false, lastEvent: "Simulator only — Android Accessibility is unavailable in this preview.", lastSeen: "Nothing seen from Jeeny yet", outcomeStats: "{}" };
 }
