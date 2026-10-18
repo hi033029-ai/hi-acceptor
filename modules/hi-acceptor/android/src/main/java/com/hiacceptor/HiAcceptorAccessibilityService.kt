@@ -437,12 +437,9 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     )
     if (activeMarkers.any(normalized::contains)) return JeenyScreen.ACTIVE_TRIP
 
-    val offline = listOf("you're offline", "you’re offline", "go online", "غير متصل", "تشغيل").all { marker ->
-      when (marker) {
-        "you're offline", "you’re offline", "غير متصل" -> normalized.contains(marker)
-        else -> true
-      }
-    } && (normalized.contains("you're offline") || normalized.contains("you’re offline") || normalized.contains("غير متصل"))
+    val offlineLabel = normalized.contains("you're offline") || normalized.contains("you’re offline") || normalized.contains("غير متصل")
+    val onlineAction = normalized.contains("go online") || normalized.contains("تشغيل")
+    val offline = offlineLabel && onlineAction
     if (offline) return JeenyScreen.OFFLINE_HOME
 
     val hasMoney = moneyRegex.containsMatchIn(allText)
