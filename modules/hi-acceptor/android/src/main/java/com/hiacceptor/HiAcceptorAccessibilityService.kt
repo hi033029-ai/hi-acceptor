@@ -37,6 +37,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
   private data class Parsed(val fare: Double, val currency: String, val pickupMinutes: Double, val destination: String)
   private data class Circle(val id: String, val label: String, val latitude: Double, val longitude: Double, val radiusMeters: Double, val names: List<String>)
+  private enum class JeenyScreen { OFFER, ACTIVE_TRIP, OFFLINE_HOME, ONLINE_HOME, UNKNOWN }
 
   private var lastFingerprint = ""
   private var pendingFingerprint = ""
@@ -45,6 +46,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private var lastGeocodeAt = 0L
   private var lastToastAt = 0L
   private var lastSeenWriteAt = 0L
+  private var lastActiveTripAt = 0L
   private var eventCount = 0
   private val moneyRegex = Regex(
     "(?:(?:﷼|SAR|SR|ر\\.?\\s?س|ريال)\\s*\\d+(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?\\s*(?:﷼|SAR|SR|ر\\.?\\s?س|ريال))",
@@ -107,15 +109,30 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       recordSeen(prefs, "Jeeny events received but no readable window")
       return
     }
-    val primaryRoot = roots.firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: roots.first()
-    if (ensureOnline(primaryRoot)) return
+    val primaryRoot = roots.first()
     val allText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
     if (allText.isBlank()) {
       recordSeen(prefs, "Jeeny events received but screen text is EMPTY (Jeeny may hide it from accessibility)")
       return
     }
     recordSeen(prefs, "Seen: " + allText.take(300))
-    if (!isJeenyOfferCard(allText)) return
+    val screen = classifyScreen(allText, roots)
+    if (screen == JeenyScreen.ACTIVE_TRIP) {
+      lastActiveTripAt = SystemClock.elapsedRealtime()
+      recordSeen(prefs, "[state=ACTIVE_TRIP] Ignored active trip")
+      return
+    }
+    if (screen == JeenyScreen.OFFLINE_HOME) {
+      recordBottomRightControls(prefs, roots)
+      if (ensureOnline(primaryRoot)) return
+      recordSeen(prefs, "[state=OFFLINE_HOME] No offer")
+      return
+    }
+    if (screen != JeenyScreen.OFFER) {
+      if (screen == JeenyScreen.ONLINE_HOME) recordBottomRightControls(prefs, roots)
+      recordSeen(prefs, "[state=${screen.name}] Ignored non-offer screen")
+      return
+    }
     showStatusToast("Scanning ride…", 1200L)
     val candidate = parseDetails(allText)
     val parsed = candidate?.takeIf(::matchesRules)
@@ -176,6 +193,10 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private fun rejectOrSkip(target: String, fingerprint: String, reason: String) {
     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
     val root = rootInActiveWindow
+    if (root == null || SystemClock.elapsedRealtime() - lastActiveTripAt < 5000L || classifyScreen(collectText(root).joinToString(" | "), listOf(root)) != JeenyScreen.OFFER) {
+      prefs.edit().putString("lastEvent", "Skipped: offer screen changed before decline action").apply()
+      return
+    }
     val rejectNode = root?.let(::findRejectNode)
     if (rejectNode != null) {
       val rejected = if (rejectNode.isClickable) rejectNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(rejectNode)
@@ -189,7 +210,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         return
       }
     }
-    if (root != null && tapOfferCloseFallback()) {
+    if (tapOfferCloseFallback()) {
       lastFingerprint = fingerprint
       lastTapAt = SystemClock.elapsedRealtime()
       prefs.edit().putString("lastEvent", "Skipped: $reason").apply()
@@ -218,10 +239,12 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   private fun completeDecision(target: String, fingerprint: String, originalText: String, points: List<Pair<Double, Double>>) {
     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
     if (!prefs.getBoolean("operationEnabled", false)) return
+    if (SystemClock.elapsedRealtime() - lastActiveTripAt < 5000L) return
     refreshConfiguration()
     val currentTarget = JEENY
     if (currentTarget != target) return
-    val root = activeJeenyRoots().firstOrNull { isJeenyOfferCard(collectText(it).joinToString(" | ")) } ?: return
+    val roots = activeJeenyRoots()
+    val root = roots.firstOrNull { classifyScreen(collectText(it).joinToString(" | "), listOf(it)) == JeenyScreen.OFFER } ?: return
     if (root.packageName?.toString() != target) return
     val currentText = collectText(root).joinToString(" | ").take(5000)
     val currentFingerprint = offerFingerprint(target, currentText)
@@ -315,8 +338,10 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
       if (!prefs.getBoolean("operationEnabled", false)) return@postDelayed
       if (lastFingerprint == fingerprint) return@postDelayed
+      if (SystemClock.elapsedRealtime() - lastActiveTripAt < 5000L) return@postDelayed
       val root = rootInActiveWindow ?: return@postDelayed
       if (root.packageName?.toString() != JEENY) return@postDelayed
+      if (classifyScreen(collectText(root).joinToString(" | "), listOf(root)) != JeenyScreen.OFFER) return@postDelayed
       val node = findRejectNode(root, allowTopRightIcon = true)
       if (node == null) {
         if (tapOfferCloseFallback()) {
@@ -341,20 +366,31 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
   private fun scheduleMapRecenter() {
     mainHandler.postDelayed({
-      val root = rootInActiveWindow ?: return@postDelayed
-      if (root.packageName?.toString() != JEENY) return@postDelayed
-      val node = findMapRecenterNode(root) ?: return@postDelayed
-      val clicked = if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(node)
-      if (clicked) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Declined excluded ride and recentered Jeeny map").apply()
+      if (SystemClock.elapsedRealtime() - lastActiveTripAt < 5000L) return@postDelayed
+      val roots = activeJeenyRoots()
+      if (roots.isEmpty()) return@postDelayed
+      val text = roots.flatMap(::collectText).joinToString(" | ").take(5000)
+      val state = classifyScreen(text, roots)
+      if (state == JeenyScreen.ACTIVE_TRIP || state == JeenyScreen.OFFER) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Recenter skipped while Jeeny screen is ${state.name}").apply()
+        return@postDelayed
+      }
+      val node = roots.asSequence().mapNotNull(::findMapRecenterNode).firstOrNull()
+      if (node == null) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Recenter button not found").apply()
+        return@postDelayed
+      }
+      val clicked = node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", if (clicked) "Declined excluded ride and recentered Jeeny map" else "Recenter button not found").apply()
     }, 400L)
   }
 
   private fun findMapRecenterNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-    val description = node.contentDescription?.toString()?.lowercase(Locale.ROOT).orEmpty()
+    val description = sequenceOf(node.contentDescription?.toString(), node.text?.toString()).filterNotNull().joinToString(" ").lowercase(Locale.ROOT)
     val resourceId = node.viewIdResourceName?.lowercase(Locale.ROOT).orEmpty()
-    val recenterLabel = listOf("my location", "current location", "your location", "recenter", "موقعي", "موقعك", "الموقع الحالي").any(description::contains)
+    val recenterLabel = listOf("my location", "current location", "your location", "recenter", "re-center", "locate", "center", "relocate", "موقعي", "موقعك", "الموقع الحالي", "إعادة التمركز", "تحديد الموقع").any(description::contains)
     val recenterResource = listOf("my_location", "current_location", "recenter", "location_button", "user_location").any(resourceId::contains)
-    if ((recenterLabel || recenterResource) && node.isEnabled && (node.isClickable || node.childCount == 0)) return node
+    if ((recenterLabel || recenterResource) && node.isEnabled && node.isClickable) return node
     for (index in 0 until node.childCount) {
       val child = node.getChild(index) ?: continue
       findMapRecenterNode(child)?.let { return it }
@@ -393,14 +429,29 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     return Parsed(amount, normalizeCurrency(currencyToken), eta, destination)
   }
 
-  private fun isJeenyOfferCard(text: String): Boolean {
-    val normalized = text.lowercase(Locale.ROOT)
-    val legacy = normalized.contains("you'll earn") || normalized.contains("you’ll earn") || normalized.contains("net earning") || normalized.contains("accept offer") || normalized.contains("قبول العرض") || normalized.contains("mins away") || normalized.contains("﷼")
-    if (legacy) return true
-    val hasMoney = moneyRegex.containsMatchIn(text)
-    val hasEta = etaRegex.containsMatchIn(text)
-    val hasAccept = listOf("accept", "قبول", "اقبل").any(normalized::contains)
-    return hasMoney && (hasEta || hasAccept)
+  private fun classifyScreen(allText: String, roots: List<AccessibilityNodeInfo>): JeenyScreen {
+    val normalized = allText.lowercase(Locale.ROOT)
+    val activeMarkers = listOf(
+      "arrived at pickup", "pickup passenger", "picking", "start trip", "end trip", "complete trip", "navigate",
+      "وصل إلى موقع الاستلام", "وصل لموقع الاستلام", "استلام الراكب", "جاري الاستلام", "بدء الرحلة", "إنهاء الرحلة", "إكمال الرحلة", "ملاحة"
+    )
+    if (activeMarkers.any(normalized::contains)) return JeenyScreen.ACTIVE_TRIP
+
+    val offline = listOf("you're offline", "you’re offline", "go online", "غير متصل", "تشغيل").all { marker ->
+      when (marker) {
+        "you're offline", "you’re offline", "غير متصل" -> normalized.contains(marker)
+        else -> true
+      }
+    } && (normalized.contains("you're offline") || normalized.contains("you’re offline") || normalized.contains("غير متصل"))
+    if (offline) return JeenyScreen.OFFLINE_HOME
+
+    val hasMoney = moneyRegex.containsMatchIn(allText)
+    val hasMinutes = etaRegex.containsMatchIn(allText)
+    val hasAccept = roots.any { findAcceptNode(it) != null }
+    if (hasMoney && hasMinutes && hasAccept) return JeenyScreen.OFFER
+
+    val looksOnline = listOf("online", "ready", "start accepting", "متصل", "جاهز").any(normalized::contains)
+    return if (looksOnline) JeenyScreen.ONLINE_HOME else JeenyScreen.UNKNOWN
   }
 
   private fun matchesRules(parsed: Parsed): Boolean {
@@ -415,7 +466,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
 
   private fun evaluateReason(text: String): String {
     if (settings.optDouble("maxFare", 0.0) <= settings.optDouble("minFare", 0.0)) return "minimum and maximum fare must be set"
-    if (!Regex("(?:fare|price|earnings|السعر|قيمة الرحلة)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "fare not clearly identified"
+    if (!Regex("(?:fare|price|earnings|you['’]?ll\\s+earn|السعر|قيمة الرحلة)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "fare not clearly identified"
     if (!Regex("(?:pickup|pick-up|arrival|arrive|to pickup|وقت الوصول|وقت الاستلام)", RegexOption.IGNORE_CASE).containsMatchIn(text)) return "pickup time not clearly identified"
     return "request details are unclear or do not meet your fare, currency, or pickup rules"
   }
@@ -503,6 +554,21 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val own = sequenceOf(node.text?.toString(), node.contentDescription?.toString()).filterNotNull().filter(String::isNotBlank).toList()
     val children = (0 until node.childCount).flatMap { index -> node.getChild(index)?.let(::collectText) ?: emptyList() }
     return own + children
+  }
+
+  private fun recordBottomRightControls(prefs: SharedPreferences, roots: List<AccessibilityNodeInfo>) {
+    val width = resources.displayMetrics.widthPixels
+    val height = resources.displayMetrics.heightPixels
+    val controls = mutableListOf<String>()
+    fun visit(node: AccessibilityNodeInfo) {
+      val bounds = Rect().also { node.getBoundsInScreen(it) }
+      if (node.isClickable && bounds.centerX() >= width / 2 && bounds.centerY() >= height / 2) {
+        controls += "${node.className}|${node.contentDescription ?: node.text ?: ""}|${node.viewIdResourceName ?: ""}|${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
+      }
+      for (index in 0 until node.childCount) node.getChild(index)?.let(::visit)
+    }
+    roots.forEach(::visit)
+    if (controls.isNotEmpty()) recordSeen(prefs, "[state=HOME] bottom-right controls: ${controls.distinct().take(12).joinToString(" || ")}")
   }
 
   private fun activeJeenyRoots(): List<AccessibilityNodeInfo> {
