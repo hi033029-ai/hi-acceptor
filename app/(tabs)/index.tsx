@@ -4,6 +4,7 @@ import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { ScreenContainer } from "@/components/screen-container";
 import { AreaPicker } from "@/components/AreaPicker";
+import { ServiceStatusBanner } from "@/components/ServiceStatusBanner";
 import { getNativeStatus, hasNativeAcceptor, isAccessibilityEnabled, launchJeeny, openAccessibilitySettings, openAppSettings, saveNativeSettings, setOperationEnabled } from "@/lib/hi-acceptor-native";
 import { DEFAULT_SETTINGS, MAX_EXCLUDED_AREAS, createArea, loadOperationEnabled, loadSettings, saveOperationEnabled, saveSettings, type StoredSettings } from "@/lib/hi-acceptor-store";
 import type { AreaCircle } from "@/lib/ride-rules";
@@ -58,6 +59,11 @@ export default function HomeScreen() {
   const [languageDraft, setLanguageDraft] = useState<AppLanguage>("en");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const text = translations[language ?? "en"];
+  const liveServiceState = !hasNativeAcceptor || !permissions.accessibility
+    ? "DISABLED"
+    : !connected
+      ? "ENABLED_BUT_NOT_CONNECTED"
+      : enabled ? "RUNNING" : "CONNECTED";
 
   const queuePersist = (next: StoredSettings) => {
     const task = saveQueueRef.current.catch(() => undefined).then(async () => {
@@ -253,7 +259,7 @@ export default function HomeScreen() {
       <View style={{ backgroundColor: ink, borderRadius: 22, padding: 19, marginBottom: 12 }}>
         <View style={rowBetween}><View><Text style={{ color: "#A8C4C4", fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>{text.automation}</Text><Text style={{ color: "white", fontSize: 24, fontWeight: "800", marginTop: 5 }}>{enabled ? text.running : text.stopped}</Text></View><Pressable onPress={() => void toggleAutomation()} style={{ backgroundColor: enabled ? red : teal, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 18 }}><Text style={{ color: "white", fontWeight: "900" }}>{enabled ? text.stop : text.start}</Text></Pressable></View>
         <Text numberOfLines={6} style={{ color: connected ? "#C9DDDB" : "#FFB4A8", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
-        {hasNativeAcceptor && !connected && <Pressable onPress={() => void openAccessibility()} style={[secondaryButton, { marginTop: 12, backgroundColor: "#FFF4F1", borderColor: "#FFB4A8" }]}><Text style={{ color: red, fontWeight: "900" }}>RECONNECT ACCESSIBILITY</Text></Pressable>}
+        <View style={{ marginTop: 12 }}><ServiceStatusBanner status={liveServiceState} onReconnect={() => void openAccessibility()} onOpenSettings={() => void openAppSettings()} /></View>
       </View>
 
       <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>
