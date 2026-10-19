@@ -63,6 +63,7 @@ class HiAcceptorModule : Module() {
       val enabledServices = Settings.Secure.getString(appContext.reactContext!!.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
       mapOf(
         "enabled" to prefs.getBoolean("operationEnabled", false),
+        "connected" to HiAcceptorAccessibilityService.serviceConnected,
         "accessibilityEnabled" to enabledServices.split(":").any { it.equals(expected, true) },
         "lastEvent" to (prefs.getString("lastEvent", null) ?: "No request processed yet"),
         "lastSeen" to (prefs.getString("lastSeen", null) ?: "Nothing seen from Jeeny yet"),

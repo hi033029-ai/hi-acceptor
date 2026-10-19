@@ -49,6 +49,7 @@ export default function HomeScreen() {
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
   const [permissions, setPermissions] = useState<PermissionState>({ accessibility: false, foreground: false });
   const [enabled, setEnabled] = useState(false);
+  const [connected, setConnected] = useState(false);
   const [saved, setSaved] = useState(false);
   const [serviceStatus, setServiceStatus] = useState("No request processed yet");
   const [outcomeStats, setOutcomeStats] = useState<OutcomeStats>({});
@@ -75,8 +76,9 @@ export default function HomeScreen() {
     ]);
     setSettings(stored);
     setPermissions({ accessibility, foreground: foreground.status === "granted" });
-    setEnabled(hasNativeAcceptor && accessibility && storedEnabled && nativeStatus.enabled);
-    setServiceStatus(nativeStatus.lastEvent ?? "No request processed yet");
+    setConnected(hasNativeAcceptor && nativeStatus.connected);
+    setEnabled(hasNativeAcceptor && accessibility && nativeStatus.connected && storedEnabled && nativeStatus.enabled);
+    setServiceStatus(`${nativeStatus.connected ? "Accessibility Connected" : "Accessibility Disconnected"}\n${nativeStatus.lastEvent ?? "No request processed yet"}`);
     setOutcomeStats(parseOutcomeStats(nativeStatus.outcomeStats));
     if (hasNativeAcceptor) await saveNativeSettings({ ...stored, targetPackage: supported[stored.targetApp] });
   }, []);
@@ -98,7 +100,9 @@ export default function HomeScreen() {
     const id = setInterval(async () => {
       const status = await getNativeStatus().catch(() => null);
       if (status) {
-        setServiceStatus(`${status.lastEvent ?? "No request processed yet"}\n${status.lastSeen ?? ""}`);
+        setConnected(hasNativeAcceptor && status.connected);
+        setEnabled(hasNativeAcceptor && status.accessibilityEnabled && status.connected && status.enabled);
+        setServiceStatus(`${status.connected ? "Accessibility Connected" : "Accessibility Disconnected"}\n${status.lastEvent ?? "No request processed yet"}\n${status.lastSeen ?? ""}`);
         setOutcomeStats(parseOutcomeStats(status.outcomeStats));
       }
     }, 2000);
@@ -248,7 +252,8 @@ export default function HomeScreen() {
 
       <View style={{ backgroundColor: ink, borderRadius: 22, padding: 19, marginBottom: 12 }}>
         <View style={rowBetween}><View><Text style={{ color: "#A8C4C4", fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>{text.automation}</Text><Text style={{ color: "white", fontSize: 24, fontWeight: "800", marginTop: 5 }}>{enabled ? text.running : text.stopped}</Text></View><Pressable onPress={() => void toggleAutomation()} style={{ backgroundColor: enabled ? red : teal, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 18 }}><Text style={{ color: "white", fontWeight: "900" }}>{enabled ? text.stop : text.start}</Text></Pressable></View>
-        <Text numberOfLines={6} style={{ color: "#C9DDDB", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
+        <Text numberOfLines={6} style={{ color: connected ? "#C9DDDB" : "#FFB4A8", fontSize: 12, lineHeight: 17, marginTop: 13 }}>{serviceStatus}</Text>
+        {hasNativeAcceptor && !connected && <Pressable onPress={() => void openAccessibility()} style={[secondaryButton, { marginTop: 12, backgroundColor: "#FFF4F1", borderColor: "#FFB4A8" }]}><Text style={{ color: red, fontWeight: "900" }}>RECONNECT ACCESSIBILITY</Text></Pressable>}
       </View>
 
       <View style={card}><Text style={title}>{text.permissions}</Text><Text style={helper}>{text.permissionHelp} On Xiaomi, if Android shows “Restricted setting”, open Android Settings → Apps → HI Acceptor → the three-dot menu → Allow restricted settings, then return here and enable the service.</Text>

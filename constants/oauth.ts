@@ -11,12 +11,12 @@ const schemeFromBundleId = `manus${timestamp}`;
 const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string | undefined>;
 
 const env = {
-  portal: extra.oauthPortalUrl ?? process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL ?? "",
-  server: extra.oauthServerUrl ?? process.env.EXPO_PUBLIC_OAUTH_SERVER_URL ?? "",
-  appId: extra.appId ?? process.env.EXPO_PUBLIC_APP_ID ?? "",
-  ownerId: process.env.EXPO_PUBLIC_OWNER_OPEN_ID ?? "",
-  ownerName: process.env.EXPO_PUBLIC_OWNER_NAME ?? "",
-  apiBaseUrl: extra.apiBaseUrl ?? process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
+  portal: extra.oauthPortalUrl ?? "",
+  server: extra.oauthServerUrl ?? "",
+  appId: extra.appId ?? "",
+  ownerId: "",
+  ownerName: "",
+  apiBaseUrl: extra.apiBaseUrl ?? "",
   deepLinkScheme: schemeFromBundleId,
 };
 

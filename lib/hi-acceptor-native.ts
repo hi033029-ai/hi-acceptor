@@ -9,7 +9,7 @@ type NativeAcceptor = {
   launchJeeny(): Promise<void>;
   setOperationEnabled(enabled: boolean): Promise<void>;
   saveSettings(settingsJson: string): Promise<void>;
-  getStatus(): Promise<{ enabled: boolean; accessibilityEnabled: boolean; lastEvent?: string; lastSeen?: string; outcomeStats?: string }>;
+  getStatus(): Promise<{ enabled: boolean; connected: boolean; accessibilityEnabled: boolean; lastEvent?: string; lastSeen?: string; outcomeStats?: string }>;
 };
 
 const native = (() => {
@@ -49,5 +49,5 @@ export async function saveNativeSettings(settings: RideSettings & { targetPackag
 export async function getNativeStatus() {
   return hasNativeAcceptor
     ? native!.getStatus()
-    : { enabled: false, accessibilityEnabled: false, lastEvent: "Simulator only — Android Accessibility is unavailable in this preview.", lastSeen: "Nothing seen from Jeeny yet", outcomeStats: "{}" };
+    : { enabled: false, connected: false, accessibilityEnabled: false, lastEvent: "Simulator only — Android Accessibility is unavailable in this preview.", lastSeen: "Nothing seen from Jeeny yet", outcomeStats: "{}" };
 }

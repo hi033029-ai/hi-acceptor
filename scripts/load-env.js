@@ -33,21 +33,4 @@ if (fs.existsSync(envPath)) {
   });
 }
 
-// Map platform variables to Expo public variables. Canonical MANUS_* names win;
-// legacy aliases remain as fallbacks for older published environments.
-const mappings = [
-  ["MANUS_PROJECT_ID", "EXPO_PUBLIC_APP_ID"],
-  ["MANUS_OAUTH_PORTAL_URL", "EXPO_PUBLIC_OAUTH_PORTAL_URL"],
-  ["MANUS_OAUTH_API_URL", "EXPO_PUBLIC_OAUTH_SERVER_URL"],
-  ["VITE_APP_ID", "EXPO_PUBLIC_APP_ID"],
-  ["VITE_OAUTH_PORTAL_URL", "EXPO_PUBLIC_OAUTH_PORTAL_URL"],
-  ["OAUTH_SERVER_URL", "EXPO_PUBLIC_OAUTH_SERVER_URL"],
-  ["OWNER_OPEN_ID", "EXPO_PUBLIC_OWNER_OPEN_ID"],
-  ["OWNER_NAME", "EXPO_PUBLIC_OWNER_NAME"],
-];
-
-for (const [systemVar, expoVar] of mappings) {
-  if (process.env[systemVar] && !process.env[expoVar]) {
-    process.env[expoVar] = process.env[systemVar];
-  }
-}
+// No platform, MANUS, or OAuth variables are propagated into this app build.

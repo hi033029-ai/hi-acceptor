@@ -33,6 +33,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     const val PREFS = "hiaccept.local"
     private const val JEENY = "me.com.easytaxista"
     @Volatile var instance: HiAcceptorAccessibilityService? = null
+    @Volatile var serviceConnected = false
   }
 
   private data class Parsed(val fare: Double, val currency: String, val pickupMinutes: Double, val destination: String)
@@ -67,11 +68,12 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   override fun onServiceConnected() {
     super.onServiceConnected()
     instance = this
+    serviceConnected = true
     serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
       eventTypes = AccessibilityEvent.TYPES_ALL_MASK
       feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
       flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-      notificationTimeout = 200
+      notificationTimeout = 50
       packageNames = arrayOf(JEENY)
     }
     refreshConfiguration()
@@ -227,7 +229,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     val now = SystemClock.elapsedRealtime()
     if (now - lastOnlineAttemptAt < 5000) return false
     val onlineNode = findGoOnlineNode(root) ?: return false
-    val clicked = if (onlineNode.isClickable) onlineNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(onlineNode)
+    val clicked = performNodeClick(onlineNode) || tapCenter(onlineNode)
     if (clicked) {
       lastOnlineAttemptAt = now
       getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Jeeny online mode started").apply()
@@ -273,7 +275,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         scheduleDeclineRetry(excludedMatch.label, currentFingerprint, 1000L)
         return
       }
-      val declined = if (rejectNode.isClickable) rejectNode.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(rejectNode)
+      val declined = performNodeClick(rejectNode) || tapCenter(rejectNode)
       if (declined) {
         lastFingerprint = currentFingerprint
         lastTapAt = SystemClock.elapsedRealtime()
@@ -315,7 +317,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       } else prefs.edit().putString("lastEvent", "Skipped: no explicit accept button identified").apply()
       return
     }
-    val clicked = if (button.isClickable) button.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(button)
+    val clicked = performNodeClick(button) || tapCenter(button)
     if (clicked) {
       lastFingerprint = currentFingerprint
       lastTapAt = SystemClock.elapsedRealtime()
@@ -353,7 +355,7 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         }
         return@postDelayed
       }
-      val clicked = if (node.isClickable) node.performAction(AccessibilityNodeInfo.ACTION_CLICK) else tapCenter(node)
+      val clicked = performNodeClick(node) || tapCenter(node)
       if (clicked) {
         lastFingerprint = fingerprint
         lastTapAt = SystemClock.elapsedRealtime()
@@ -365,7 +367,9 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   }
 
   private fun scheduleMapRecenter() {
-    mainHandler.postDelayed({
+    var recentered = false
+    listOf(350L, 900L, 1800L).forEach { delay -> mainHandler.postDelayed({
+      if (recentered) return@postDelayed
       if (SystemClock.elapsedRealtime() - lastActiveTripAt < 5000L) return@postDelayed
       val roots = activeJeenyRoots()
       if (roots.isEmpty()) return@postDelayed
@@ -380,9 +384,10 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", "Recenter button not found").apply()
         return@postDelayed
       }
-      val clicked = node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+      val clicked = performNodeClick(node)
+      if (clicked) recentered = true
       getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("lastEvent", if (clicked) "Declined excluded ride and recentered Jeeny map" else "Recenter button not found").apply()
-    }, 400L)
+    }, delay) }
   }
 
   private fun findMapRecenterNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -396,6 +401,15 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       findMapRecenterNode(child)?.let { return it }
     }
     return null
+  }
+
+  private fun performNodeClick(node: AccessibilityNodeInfo?): Boolean {
+    var current = node
+    while (current != null) {
+      if (current.isEnabled && current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+      current = current.parent
+    }
+    return false
   }
 
   private fun parseDetails(text: String): Parsed? {
@@ -672,9 +686,12 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     prefs.edit().putString("outcomeStats", stats.toString()).apply()
   }
 
-  override fun onInterrupt() {}
+  override fun onInterrupt() {
+    serviceConnected = false
+  }
 
   override fun onDestroy() {
+    serviceConnected = false
     instance = null
     geocoderExecutor.shutdownNow()
     super.onDestroy()
