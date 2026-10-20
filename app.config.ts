@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   ios: { supportsTablet: true, bundleIdentifier: env.bundleId, infoPlist: { ITSAppUsesNonExemptEncryption: false } },
   android: {
     adaptiveIcon: { backgroundColor: "#102532", foregroundImage: "./assets/images/android-icon-foreground.png", backgroundImage: "./assets/images/android-icon-background.png", monochromeImage: "./assets/images/android-icon-monochrome.png" },
-    predictiveBackGestureEnabled: false, package: env.bundleId, versionCode: 8, permissions: ["POST_NOTIFICATIONS", "ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
+    predictiveBackGestureEnabled: false, package: "com.hiacceptor.pk", versionCode: 9, permissions: ["POST_NOTIFICATIONS", "ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
     intentFilters: [{ action: "VIEW", autoVerify: true, data: [{ scheme: env.scheme, host: "*" }], category: ["BROWSABLE", "DEFAULT"] }],
   },
   web: { bundler: "metro", output: "static", favicon: "./assets/images/favicon.png" },
