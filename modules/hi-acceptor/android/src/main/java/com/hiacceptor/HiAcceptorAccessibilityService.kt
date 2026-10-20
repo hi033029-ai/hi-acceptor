@@ -113,9 +113,15 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       return
     }
 
+    val sourceText = event.source?.let { collectText(it).joinToString(" | ").take(500) }.orEmpty()
+    if (sourceText.isNotBlank()) {
+      recordSeen(prefs, "Jeeny source text [${eventTypeName(event.eventType)}]: $sourceText")
+    }
+
     val roots = activeJeenyRoots()
     if (roots.isEmpty()) {
-      recordSeen(prefs, "Jeeny event received but no readable Jeeny window; type=${event.eventType}")
+      recordSeen(prefs, "Jeeny event received but no readable Jeeny window; type=${eventTypeName(event.eventType)}; source=${event.className ?: "unknown"}")
+      scheduleDiagnosticRescan(prefs)
       return
     }
     val diagnosticText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
@@ -682,6 +688,29 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
     if (now - lastSeenWriteAt < 1000) return
     lastSeenWriteAt = now
     prefs.edit().putString("lastSeen", "$note [events: $eventCount]").apply()
+  }
+
+  private fun eventTypeName(type: Int): String = when (type) {
+    AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> "NOTIFICATION_STATE_CHANGED(64)"
+    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "WINDOW_STATE_CHANGED(32)"
+    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "WINDOW_CONTENT_CHANGED(2048)"
+    AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "VIEW_TEXT_CHANGED(16)"
+    AccessibilityEvent.TYPE_VIEW_CLICKED -> "VIEW_CLICKED(1)"
+    else -> type.toString()
+  }
+
+  private fun scheduleDiagnosticRescan(prefs: SharedPreferences) {
+    val delays = longArrayOf(120L, 350L, 800L)
+    delays.forEach { delay ->
+      mainHandler.postDelayed({
+        val roots = activeJeenyRoots()
+        if (roots.isNotEmpty()) {
+          val text = roots.flatMap(::collectText).joinToString(" | ").take(500)
+          if (text.isBlank()) recordSeen(prefs, "Delayed Jeeny rescan found a window but text is EMPTY")
+          else recordSeen(prefs, "Delayed Jeeny text: $text")
+        }
+      }, delay)
+    }
   }
 
   private fun offerFingerprint(target: String, text: String): String {
