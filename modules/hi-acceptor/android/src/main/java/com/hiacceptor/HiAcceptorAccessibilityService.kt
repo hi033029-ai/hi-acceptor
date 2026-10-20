@@ -74,7 +74,9 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
       flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
       notificationTimeout = 50
-      packageNames = arrayOf(JEENY)
+      // Receive all package events so diagnostics can prove the package name used by
+      // the installed Jeeny build. Ride actions remain strictly gated by JEENY below.
+      packageNames = null
     }
     refreshConfiguration()
     showStatusToast("HI Acceptor connected")
@@ -100,17 +102,33 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
     if (event == null || event.packageName == null) return
     val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+    val eventPackage = event.packageName?.toString().orEmpty()
+    if (eventPackage.isBlank()) return
+    eventCount++
+    if (eventPackage != JEENY) {
+      val lowerPackage = eventPackage.lowercase(Locale.ROOT)
+      if (lowerPackage.contains("jeeny") || lowerPackage.contains("easytaxi") || lowerPackage.contains("taxista")) {
+        recordSeen(prefs, "Possible Jeeny package detected: $eventPackage; expected $JEENY")
+      }
+      return
+    }
+
+    val roots = activeJeenyRoots()
+    if (roots.isEmpty()) {
+      recordSeen(prefs, "Jeeny event received but no readable Jeeny window; type=${event.eventType}")
+      return
+    }
+    val diagnosticText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
+    if (diagnosticText.isBlank()) {
+      recordSeen(prefs, "Jeeny event received but text is EMPTY; type=${event.eventType}")
+    } else {
+      recordSeen(prefs, "Jeeny text: ${diagnosticText.take(300)}")
+    }
+
     if (!prefs.getBoolean("operationEnabled", false)) return
     refreshConfiguration()
 
     val target = JEENY
-    if (event.packageName.toString() != target) return
-    eventCount++
-    val roots = activeJeenyRoots()
-    if (roots.isEmpty()) {
-      recordSeen(prefs, "Jeeny events received but no readable window")
-      return
-    }
     val primaryRoot = roots.first()
     val allText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
     if (allText.isBlank()) {
