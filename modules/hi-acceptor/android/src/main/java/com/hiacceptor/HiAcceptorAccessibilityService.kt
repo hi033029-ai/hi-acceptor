@@ -118,11 +118,23 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
       recordSeen(prefs, "Jeeny source text [${eventTypeName(event.eventType)}]: $sourceText")
     }
 
-    val roots = activeJeenyRoots()
+    var roots = activeJeenyRoots()
     if (roots.isEmpty()) {
-      recordSeen(prefs, "Jeeny event received but no readable Jeeny window; type=${eventTypeName(event.eventType)}; source=${event.className ?: "unknown"}")
-      scheduleDiagnosticRescan(prefs)
-      return
+      val candidates = activeAccessibilityRoots()
+      val candidateText = candidates.flatMap(::collectText).joinToString(" | ").take(5000)
+      val hasOfferMarker = candidateText.isNotBlank() && classifyScreen(candidateText, candidates) == JeenyScreen.OFFER
+      recordSeen(
+        prefs,
+        "Jeeny event but no exact Jeeny root; type=${eventTypeName(event.eventType)}; source=${event.className ?: "unknown"}; " +
+          "windows=${describeActiveWindows(candidates)}"
+      )
+      // Some Jeeny builds render the offer in a child/overlay window whose root
+      // package is exposed as Android or another renderer. Only accept that root
+      // when the Jeeny event and unmistakable offer markers agree.
+      if (hasOfferMarker) roots = candidates else {
+        scheduleDiagnosticRescan(prefs)
+        return
+      }
     }
     val diagnosticText = roots.flatMap(::collectText).joinToString(" | ").take(5000)
     if (diagnosticText.isBlank()) {
@@ -607,15 +619,32 @@ class HiAcceptorAccessibilityService : AccessibilityService() {
   }
 
   private fun activeJeenyRoots(): List<AccessibilityNodeInfo> {
+    return activeAccessibilityRoots().filter { it.packageName?.toString() == JEENY }
+  }
+
+  private fun activeAccessibilityRoots(): List<AccessibilityNodeInfo> {
     val roots = mutableListOf<AccessibilityNodeInfo>()
     rootInActiveWindow?.let { roots.add(it) }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      windows.orEmpty().forEach { window ->
-        val root = window.root ?: return@forEach
-        if (root.packageName?.toString() == JEENY && roots.none { it === root }) roots.add(root)
+      runCatching {
+        windows.orEmpty().forEach { window ->
+          val root = window.root ?: return@forEach
+          val duplicate = roots.any {
+            it.packageName?.toString() == root.packageName?.toString() &&
+              Rect().also { bounds -> it.getBoundsInScreen(bounds) } == Rect().also { bounds -> root.getBoundsInScreen(bounds) }
+          }
+          if (!duplicate) roots.add(root)
+        }
       }
     }
-    return roots.filter { it.packageName?.toString() == JEENY }
+    return roots
+  }
+
+  private fun describeActiveWindows(roots: List<AccessibilityNodeInfo>): String {
+    return roots.take(8).joinToString(" || ") { root ->
+      val text = collectText(root).joinToString(" ").replace(Regex("\\s+"), " ").take(120)
+      "${root.packageName ?: "?"}/${root.className ?: "?"}:$text"
+    }.ifBlank { "none" }
   }
 
   private fun findGoOnlineNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
